@@ -83,5 +83,22 @@ def check_status(device_id):
     
     return redirect(url_for('index'))
 
+@app.route('/delete_device/<int:device_id>', methods=['POST'])
+def delete_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    db.session.delete(device)
+    db.session.commit()
+    return jsonify({'message': 'Device deleted successfully'})
+
+@app.route('/delete_devices', methods=['POST'])
+def delete_devices():
+    device_ids = request.json.get('device_ids', [])
+    if not device_ids:
+        return jsonify({'error': 'No devices selected'}), 400
+    
+    Device.query.filter(Device.id.in_(device_ids)).delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({'message': f'Successfully deleted {len(device_ids)} devices'})
+
 if __name__ == '__main__':
     app.run(debug=True) 
