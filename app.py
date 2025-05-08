@@ -3,11 +3,37 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import ipaddress
 from snmp_operations import scan_ip, check_device_status
+import threading
+import time
+import json
+import os
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///devices.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
+# Configuration file path
+CONFIG_FILE = 'config.json'
+
+# Default configuration
+DEFAULT_CONFIG = {
+    'check_interval': 300  # 5 minutes in seconds
+}
+
+# Global variables
+current_check_interval = DEFAULT_CONFIG['check_interval']
+last_check_time = datetime.utcnow()
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    return DEFAULT_CONFIG
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f)
 
 class Device(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -17,13 +43,66 @@ class Device(db.Model):
     last_checked = db.Column(db.DateTime, default=datetime.utcnow)
     snmp_community = db.Column(db.String(50), default='public')
 
+def check_all_devices():
+    global current_check_interval, last_check_time
+    with app.app_context():
+        while True:
+            try:
+                devices = Device.query.all()
+                for device in devices:
+                    try:
+                        status = check_device_status(device.ip_address, device.snmp_community)
+                        device.status = 'active' if status else 'inactive'
+                        device.last_checked = datetime.utcnow()
+                    except Exception:
+                        device.status = 'inactive'
+                        device.last_checked = datetime.utcnow()
+                db.session.commit()
+                last_check_time = datetime.utcnow()
+            except Exception as e:
+                print(f"Error during device check: {str(e)}")
+            
+            # Sleep for the current interval
+            time.sleep(current_check_interval)
+
+# Start the background checking thread
+checking_thread = threading.Thread(target=check_all_devices, daemon=True)
+checking_thread.start()
+
 with app.app_context():
     db.create_all()
 
 @app.route('/')
 def index():
     devices = Device.query.all()
-    return render_template('index.html', devices=devices)
+    config = load_config()
+    return render_template('index.html', 
+                         devices=devices, 
+                         check_interval=config['check_interval'],
+                         last_check_time=last_check_time)
+
+@app.route('/get_last_check_time')
+def get_last_check_time():
+    return jsonify({'last_check_time': last_check_time.strftime('%Y-%m-%d %H:%M:%S')})
+
+@app.route('/update_check_interval', methods=['POST'])
+def update_check_interval():
+    global current_check_interval
+    try:
+        interval = int(request.form.get('interval', 300))
+        if interval < 30:  # Minimum 30 seconds
+            return jsonify({'error': 'Interval must be at least 30 seconds'}), 400
+            
+        config = load_config()
+        config['check_interval'] = interval
+        save_config(config)
+        
+        # Update the global interval variable immediately
+        current_check_interval = interval
+        
+        return jsonify({'message': 'Check interval updated successfully'})
+    except ValueError:
+        return jsonify({'error': 'Invalid interval value'}), 400
 
 @app.route('/add_device', methods=['POST'])
 def add_device():
