@@ -7,6 +7,12 @@ import threading
 import time
 import json
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO,
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///devices.db'
@@ -24,6 +30,7 @@ DEFAULT_CONFIG = {
 # Global variables
 current_check_interval = DEFAULT_CONFIG['check_interval']
 last_check_time = datetime.utcnow()
+checking_active = True
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -44,26 +51,41 @@ class Device(db.Model):
     snmp_community = db.Column(db.String(50), default='public')
 
 def check_all_devices():
-    global current_check_interval, last_check_time
+    global current_check_interval, last_check_time, checking_active
     with app.app_context():
-        while True:
+        while checking_active:
             try:
+                start_time = time.time()
+                logger.info(f"Starting device check cycle. Current interval: {current_check_interval} seconds")
+                
                 devices = Device.query.all()
+                logger.info(f"Checking {len(devices)} devices")
+                
                 for device in devices:
                     try:
                         status = check_device_status(device.ip_address, device.snmp_community)
                         device.status = 'active' if status else 'inactive'
                         device.last_checked = datetime.utcnow()
-                    except Exception:
+                        logger.info(f"Device {device.ip_address} status: {device.status}")
+                    except Exception as e:
+                        logger.error(f"Error checking device {device.ip_address}: {str(e)}")
                         device.status = 'inactive'
                         device.last_checked = datetime.utcnow()
+                
                 db.session.commit()
                 last_check_time = datetime.utcnow()
+                
+                # Calculate sleep time
+                elapsed_time = time.time() - start_time
+                sleep_time = max(0, current_check_interval - elapsed_time)
+                logger.info(f"Check cycle completed in {elapsed_time:.2f} seconds. Sleeping for {sleep_time:.2f} seconds")
+                
+                # Sleep for the remaining time
+                time.sleep(sleep_time)
+                
             except Exception as e:
-                print(f"Error during device check: {str(e)}")
-            
-            # Sleep for the current interval
-            time.sleep(current_check_interval)
+                logger.error(f"Error in check cycle: {str(e)}")
+                time.sleep(5)  # Sleep briefly before retrying
 
 # Start the background checking thread
 checking_thread = threading.Thread(target=check_all_devices, daemon=True)
@@ -99,6 +121,7 @@ def update_check_interval():
         
         # Update the global interval variable immediately
         current_check_interval = interval
+        logger.info(f"Check interval updated to {interval} seconds")
         
         return jsonify({'message': 'Check interval updated successfully'})
     except ValueError:

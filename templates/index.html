@@ -320,17 +320,15 @@
                     const newRows = doc.querySelectorAll('tbody tr');
                     const currentRows = document.querySelectorAll('tbody tr');
                     
-                    newRows.forEach((newRow, index) => {
-                        if (index < currentRows.length) {
-                            const currentRow = currentRows[index];
-                            const newStatus = newRow.querySelector('.badge').textContent;
-                            const newLastChecked = newRow.querySelector('td:nth-child(5)').textContent;
-                            
-                            currentRow.querySelector('.badge').textContent = newStatus;
-                            currentRow.querySelector('.badge').className = newRow.querySelector('.badge').className;
-                            currentRow.querySelector('td:nth-child(5)').textContent = newLastChecked;
-                        }
+                    // Clear and rebuild the table body
+                    const tbody = document.querySelector('tbody');
+                    tbody.innerHTML = '';
+                    newRows.forEach(row => {
+                        tbody.appendChild(row.cloneNode(true));
                     });
+                    
+                    // Reattach event listeners to the new rows
+                    attachTableEventListeners();
                     
                     // Update notifications
                     updateNotifications(html);
@@ -338,8 +336,37 @@
                 });
         }
 
-        // Refresh data every 5 seconds
-        setInterval(refreshData, 5000);
+        // Function to attach event listeners to table elements
+        function attachTableEventListeners() {
+            // Reattach delete device handlers
+            document.querySelectorAll('.delete-device').forEach(button => {
+                button.addEventListener('click', function() {
+                    if (confirm('Are you sure you want to delete this device?')) {
+                        const deviceId = this.dataset.deviceId;
+                        fetch(`/delete_device/${deviceId}`, {
+                            method: 'POST'
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            alert(data.message);
+                            window.location.reload();
+                        })
+                        .catch(error => {
+                            alert('An error occurred while deleting the device');
+                        });
+                    }
+                });
+            });
+
+            // Reattach checkbox handlers
+            const deviceCheckboxes = document.querySelectorAll('.device-checkbox');
+            deviceCheckboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', updateDeleteButtonVisibility);
+            });
+        }
+
+        // Refresh data every 60 seconds (1 minute)
+        setInterval(refreshData, 60000);
 
         // Scan Range Form Handler
         document.getElementById('scanRangeForm').addEventListener('submit', function(e) {
@@ -361,26 +388,6 @@
             })
             .catch(error => {
                 alert('An error occurred while scanning the range');
-            });
-        });
-
-        // Delete Device Handler
-        document.querySelectorAll('.delete-device').forEach(button => {
-            button.addEventListener('click', function() {
-                if (confirm('Are you sure you want to delete this device?')) {
-                    const deviceId = this.dataset.deviceId;
-                    fetch(`/delete_device/${deviceId}`, {
-                        method: 'POST'
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        window.location.reload();
-                    })
-                    .catch(error => {
-                        alert('An error occurred while deleting the device');
-                    });
-                }
             });
         });
 
@@ -431,6 +438,7 @@
         // Initial setup
         document.addEventListener('DOMContentLoaded', function() {
             attachNotificationEventListeners();
+            attachTableEventListeners();
             const inactiveCount = document.querySelectorAll('.notification-item').length;
             const badge = document.getElementById('notificationBadge');
             badge.textContent = inactiveCount;
