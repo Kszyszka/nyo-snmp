@@ -6,129 +6,226 @@
     <title>SNMP Network Monitor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .notification-sidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 300px;
+            background-color: #f8f9fa;
+            border-left: 1px solid #dee2e6;
+            padding: 1rem;
+            overflow-y: auto;
+            z-index: 1000;
+        }
+        
+        .main-content {
+            margin-right: 300px;
+        }
+        
+        .notification-item {
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        
+        .notification-item:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .notification-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .notification-title {
+            font-weight: bold;
+            color: #dc3545;
+        }
+        
+        .notification-time {
+            font-size: 0.875rem;
+            color: #6c757d;
+        }
+        
+        .notification-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        
+        .notification-badge {
+            position: absolute;
+            top: 1rem;
+            right: 320px;
+            background-color: #dc3545;
+            color: white;
+            border-radius: 50%;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+            display: none;
+        }
+    </style>
 </head>
 <body class="bg-light">
-    <div class="container py-4">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>SNMP Network Monitor</h1>
-            <div class="d-flex align-items-center">
-                <form id="intervalForm" class="d-flex align-items-center me-3">
-                    <label for="check_interval" class="me-2">Check Interval (seconds):</label>
-                    <input type="number" class="form-control form-control-sm me-2" id="check_interval" 
-                           name="interval" value="{{ check_interval }}" min="30" style="width: 100px;">
-                    <button type="submit" class="btn btn-primary btn-sm">Update</button>
-                </form>
-                <div class="text-muted">
-                    <small>Last check: <span id="lastCheckTime">{{ last_check_time.strftime('%H:%M:%S') }}</span></small>
+    <!-- Notification Badge -->
+    <div id="notificationBadge" class="notification-badge">0</div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="container py-4">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1>SNMP Network Monitor</h1>
+                <div class="d-flex align-items-center">
+                    <form id="intervalForm" class="d-flex align-items-center me-3">
+                        <label for="check_interval" class="me-2">Check Interval (seconds):</label>
+                        <input type="number" class="form-control form-control-sm me-2" id="check_interval" 
+                               name="interval" value="{{ check_interval }}" min="30" style="width: 100px;">
+                        <button type="submit" class="btn btn-primary btn-sm">Update</button>
+                    </form>
+                    <div class="text-muted">
+                        <small>Last check: <span id="lastCheckTime">{{ last_check_time.strftime('%H:%M:%S') }}</span></small>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Add Device Form -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Add New Device</h5>
+                </div>
+                <div class="card-body">
+                    <form action="{{ url_for('add_device') }}" method="POST">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="ip_address" class="form-label">IP Address</label>
+                                <input type="text" class="form-control" id="ip_address" name="ip_address" required>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="snmp_community" class="form-label">SNMP Community</label>
+                                <input type="text" class="form-control" id="snmp_community" name="snmp_community" value="public">
+                            </div>
+                            <div class="col-md-2 mb-3 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary w-100">Add Device</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Scan Range Form -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Scan IP Range</h5>
+                </div>
+                <div class="card-body">
+                    <form id="scanRangeForm">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="ip_range" class="form-label">IP Range (CIDR)</label>
+                                <input type="text" class="form-control" id="ip_range" name="ip_range" placeholder="192.168.1.0/24" required>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="range_snmp_community" class="form-label">SNMP Community</label>
+                                <input type="text" class="form-control" id="range_snmp_community" name="snmp_community" value="public">
+                            </div>
+                            <div class="col-md-2 mb-3 d-flex align-items-end">
+                                <button type="submit" class="btn btn-success w-100">Scan Range</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Devices Table -->
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Monitored Devices</h5>
+                    <button id="deleteSelectedBtn" class="btn btn-danger" style="display: none;">
+                        <i class="fas fa-trash"></i> Delete Selected
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="selectAll">
+                                        </div>
+                                    </th>
+                                    <th>IP Address</th>
+                                    <th>Name</th>
+                                    <th>Status</th>
+                                    <th>Last Checked</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for device in devices %}
+                                <tr>
+                                    <td>
+                                        <div class="form-check">
+                                            <input class="form-check-input device-checkbox" type="checkbox" value="{{ device.id }}">
+                                        </div>
+                                    </td>
+                                    <td>{{ device.ip_address }}</td>
+                                    <td>{{ device.name or 'Unknown' }}</td>
+                                    <td>
+                                        <span class="badge {% if device.status == 'active' %}bg-success{% else %}bg-danger{% endif %}">
+                                            {{ device.status }}
+                                        </span>
+                                    </td>
+                                    <td>{{ device.last_checked.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                                    <td>
+                                        <div class="btn-group">
+                                            <a href="{{ url_for('check_status', device_id=device.id) }}" class="btn btn-sm btn-primary">
+                                                <i class="fas fa-sync-alt"></i> Check Status
+                                            </a>
+                                            <button class="btn btn-sm btn-danger delete-device" data-device-id="{{ device.id }}">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
-        
-        <!-- Add Device Form -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">Add New Device</h5>
-            </div>
-            <div class="card-body">
-                <form action="{{ url_for('add_device') }}" method="POST">
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="ip_address" class="form-label">IP Address</label>
-                            <input type="text" class="form-control" id="ip_address" name="ip_address" required>
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <label for="snmp_community" class="form-label">SNMP Community</label>
-                            <input type="text" class="form-control" id="snmp_community" name="snmp_community" value="public">
-                        </div>
-                        <div class="col-md-2 mb-3 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary w-100">Add Device</button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
+    </div>
 
-        <!-- Scan Range Form -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">Scan IP Range</h5>
-            </div>
-            <div class="card-body">
-                <form id="scanRangeForm">
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="ip_range" class="form-label">IP Range (CIDR)</label>
-                            <input type="text" class="form-control" id="ip_range" name="ip_range" placeholder="192.168.1.0/24" required>
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <label for="range_snmp_community" class="form-label">SNMP Community</label>
-                            <input type="text" class="form-control" id="range_snmp_community" name="snmp_community" value="public">
-                        </div>
-                        <div class="col-md-2 mb-3 d-flex align-items-end">
-                            <button type="submit" class="btn btn-success w-100">Scan Range</button>
-                        </div>
+    <!-- Notification Sidebar -->
+    <div class="notification-sidebar">
+        <h5 class="mb-3">Inactive Devices (<span id="inactiveCount">{{ devices|selectattr('status', 'equalto', 'inactive')|list|length }}</span>)</h5>
+        <div id="notificationList">
+            {% for device in devices %}
+                {% if device.status == 'inactive' %}
+                <div class="notification-item" data-device-id="{{ device.id }}">
+                    <div class="notification-header">
+                        <span class="notification-title">{{ device.ip_address }}</span>
+                        <span class="notification-time">{{ device.last_checked.strftime('%H:%M:%S') }}</span>
                     </div>
-                </form>
-            </div>
-        </div>
-
-        <!-- Devices Table -->
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Monitored Devices</h5>
-                <button id="deleteSelectedBtn" class="btn btn-danger" style="display: none;">
-                    <i class="fas fa-trash"></i> Delete Selected
-                </button>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" id="selectAll">
-                                    </div>
-                                </th>
-                                <th>IP Address</th>
-                                <th>Name</th>
-                                <th>Status</th>
-                                <th>Last Checked</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for device in devices %}
-                            <tr>
-                                <td>
-                                    <div class="form-check">
-                                        <input class="form-check-input device-checkbox" type="checkbox" value="{{ device.id }}">
-                                    </div>
-                                </td>
-                                <td>{{ device.ip_address }}</td>
-                                <td>{{ device.name or 'Unknown' }}</td>
-                                <td>
-                                    <span class="badge {% if device.status == 'active' %}bg-success{% else %}bg-danger{% endif %}">
-                                        {{ device.status }}
-                                    </span>
-                                </td>
-                                <td>{{ device.last_checked.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                                <td>
-                                    <div class="btn-group">
-                                        <a href="{{ url_for('check_status', device_id=device.id) }}" class="btn btn-sm btn-primary">
-                                            <i class="fas fa-sync-alt"></i> Check Status
-                                        </a>
-                                        <button class="btn btn-sm btn-danger delete-device" data-device-id="{{ device.id }}">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                    <div class="notification-actions">
+                        <a href="{{ url_for('check_status', device_id=device.id) }}" class="btn btn-sm btn-primary">
+                            <i class="fas fa-sync-alt"></i> Check Now
+                        </a>
+                        <button class="btn btn-sm btn-danger delete-device" data-device-id="{{ device.id }}">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
                 </div>
-            </div>
+                {% endif %}
+            {% endfor %}
         </div>
     </div>
 
@@ -165,7 +262,53 @@
                 });
         }
 
-        // Refresh the page data
+        // Update notification sidebar
+        function updateNotifications(html) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const notificationList = document.getElementById('notificationList');
+            const newNotifications = doc.querySelectorAll('.notification-item');
+            
+            // Update notification count
+            const badge = document.getElementById('notificationBadge');
+            const inactiveCount = document.getElementById('inactiveCount');
+            badge.textContent = newNotifications.length;
+            inactiveCount.textContent = newNotifications.length;
+            badge.style.display = newNotifications.length > 0 ? 'block' : 'none';
+            
+            // Update notification list
+            notificationList.innerHTML = '';
+            newNotifications.forEach(notification => {
+                notificationList.appendChild(notification.cloneNode(true));
+            });
+            
+            // Reattach event listeners
+            attachNotificationEventListeners();
+        }
+
+        // Attach event listeners to notification items
+        function attachNotificationEventListeners() {
+            document.querySelectorAll('.notification-item .delete-device').forEach(button => {
+                button.addEventListener('click', function() {
+                    if (confirm('Are you sure you want to delete this device?')) {
+                        const deviceId = this.dataset.deviceId;
+                        fetch(`/delete_device/${deviceId}`, {
+                            method: 'POST'
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            alert(data.message);
+                            window.location.reload();
+                        })
+                        .catch(error => {
+                            alert('An error occurred while deleting the device');
+                        });
+                    }
+                });
+            });
+        }
+
+        // Modify the existing refreshData function
         function refreshData() {
             fetch(window.location.href)
                 .then(response => response.text())
@@ -189,6 +332,8 @@
                         }
                     });
                     
+                    // Update notifications
+                    updateNotifications(html);
                     updateLastCheckTime();
                 });
         }
@@ -281,6 +426,15 @@
                     alert('An error occurred while deleting the devices');
                 });
             }
+        });
+
+        // Initial setup
+        document.addEventListener('DOMContentLoaded', function() {
+            attachNotificationEventListeners();
+            const inactiveCount = document.querySelectorAll('.notification-item').length;
+            const badge = document.getElementById('notificationBadge');
+            badge.textContent = inactiveCount;
+            badge.style.display = inactiveCount > 0 ? 'block' : 'none';
         });
     </script>
 </body>
