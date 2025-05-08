@@ -55,7 +55,7 @@ def check_all_devices():
     with app.app_context():
         while checking_active:
             try:
-                start_time = time.time()
+                cycle_start_time = time.time()
                 logger.info(f"Starting device check cycle. Current interval: {current_check_interval} seconds")
                 
                 devices = Device.query.all()
@@ -87,13 +87,16 @@ def check_all_devices():
                     logger.error(f"Error committing changes: {str(commit_error)}")
                     db.session.rollback()
                 
-                # Calculate sleep time
-                elapsed_time = time.time() - start_time
-                sleep_time = max(0, current_check_interval - elapsed_time)
-                logger.info(f"Check cycle completed in {elapsed_time:.2f} seconds. Sleeping for {sleep_time:.2f} seconds")
+                # Calculate next cycle start time
+                elapsed_time = time.time() - cycle_start_time
+                next_cycle_time = cycle_start_time + current_check_interval
+                sleep_time = max(0, next_cycle_time - time.time())
                 
-                # Sleep for the remaining time
-                time.sleep(sleep_time)
+                logger.info(f"Check cycle completed in {elapsed_time:.2f} seconds. Next cycle in {sleep_time:.2f} seconds")
+                
+                # Sleep until next cycle
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
                 
             except Exception as e:
                 logger.error(f"Error in check cycle: {str(e)}")
