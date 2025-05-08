@@ -63,17 +63,29 @@ def check_all_devices():
                 
                 for device in devices:
                     try:
-                        status = check_device_status(device.ip_address, device.snmp_community)
-                        device.status = 'active' if status else 'inactive'
-                        device.last_checked = datetime.utcnow()
-                        logger.info(f"Device {device.ip_address} status: {device.status}")
+                        # Start a new transaction for each device
+                        with db.session.begin_nested():
+                            status = check_device_status(device.ip_address, device.snmp_community)
+                            device.status = 'active' if status else 'inactive'
+                            device.last_checked = datetime.utcnow()
+                            logger.info(f"Device {device.ip_address} status: {device.status}")
                     except Exception as e:
                         logger.error(f"Error checking device {device.ip_address}: {str(e)}")
-                        device.status = 'inactive'
-                        device.last_checked = datetime.utcnow()
+                        try:
+                            # Try to update the device status even if check fails
+                            with db.session.begin_nested():
+                                device.status = 'inactive'
+                                device.last_checked = datetime.utcnow()
+                        except Exception as update_error:
+                            logger.error(f"Error updating device status: {str(update_error)}")
+                            db.session.rollback()
                 
-                db.session.commit()
-                last_check_time = datetime.utcnow()
+                try:
+                    db.session.commit()
+                    last_check_time = datetime.utcnow()
+                except Exception as commit_error:
+                    logger.error(f"Error committing changes: {str(commit_error)}")
+                    db.session.rollback()
                 
                 # Calculate sleep time
                 elapsed_time = time.time() - start_time
@@ -85,6 +97,7 @@ def check_all_devices():
                 
             except Exception as e:
                 logger.error(f"Error in check cycle: {str(e)}")
+                db.session.rollback()  # Ensure we rollback on any error
                 time.sleep(5)  # Sleep briefly before retrying
 
 # Start the background checking thread
