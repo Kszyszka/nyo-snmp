@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SNMP Network Monitor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container py-4">
+        <h1 class="mb-4">SNMP Network Monitor</h1>
+        
+        <!-- Add Device Form -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Add New Device</h5>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('add_device') }}" method="POST">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="ip_address" class="form-label">IP Address</label>
+                            <input type="text" class="form-control" id="ip_address" name="ip_address" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="snmp_community" class="form-label">SNMP Community</label>
+                            <input type="text" class="form-control" id="snmp_community" name="snmp_community" value="public">
+                        </div>
+                        <div class="col-md-2 mb-3 d-flex align-items-end">
+                            <button type="submit" class="btn btn-primary w-100">Add Device</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Scan Range Form -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Scan IP Range</h5>
+            </div>
+            <div class="card-body">
+                <form id="scanRangeForm">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="ip_range" class="form-label">IP Range (CIDR)</label>
+                            <input type="text" class="form-control" id="ip_range" name="ip_range" placeholder="192.168.1.0/24" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="range_snmp_community" class="form-label">SNMP Community</label>
+                            <input type="text" class="form-control" id="range_snmp_community" name="snmp_community" value="public">
+                        </div>
+                        <div class="col-md-2 mb-3 d-flex align-items-end">
+                            <button type="submit" class="btn btn-success w-100">Scan Range</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Devices Table -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Monitored Devices</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>IP Address</th>
+                                <th>Name</th>
+                                <th>Status</th>
+                                <th>Last Checked</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for device in devices %}
+                            <tr>
+                                <td>{{ device.ip_address }}</td>
+                                <td>{{ device.name or 'Unknown' }}</td>
+                                <td>
+                                    <span class="badge {% if device.status == 'active' %}bg-success{% else %}bg-danger{% endif %}">
+                                        {{ device.status }}
+                                    </span>
+                                </td>
+                                <td>{{ device.last_checked.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                                <td>
+                                    <a href="{{ url_for('check_status', device_id=device.id) }}" class="btn btn-sm btn-primary">
+                                        <i class="fas fa-sync-alt"></i> Check Status
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.getElementById('scanRangeForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            
+            fetch('{{ url_for("scan_range") }}', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                } else {
+                    alert(data.message);
+                    window.location.reload();
+                }
+            })
+            .catch(error => {
+                alert('An error occurred while scanning the range');
+            });
+        });
+    </script>
+</body>
+</html> 
