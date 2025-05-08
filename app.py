@@ -261,5 +261,30 @@ def delete_devices():
     db.session.commit()
     return jsonify({'message': f'Successfully deleted {len(device_ids)} devices'})
 
+@app.route('/check_all_devices_now')
+def check_all_devices_now():
+    devices = Device.query.all()
+    for device in devices:
+        try:
+            status = check_device_status(device.ip_address, device.snmp_community)
+            device.status = 'active' if status else 'inactive'
+            device.last_checked = datetime.utcnow()
+            
+            # Try to get device name if status is active
+            if status and (not device.name or device.name == 'Unknown'):
+                try:
+                    name = get_device_name(device.ip_address, device.snmp_community)
+                    if name:
+                        device.name = name
+                except Exception as e:
+                    logger.error(f"Error getting device name: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error checking device {device.ip_address}: {str(e)}")
+            device.status = 'inactive'
+            device.last_checked = datetime.utcnow()
+    
+    db.session.commit()
+    return redirect(url_for('index'))
+
 if __name__ == '__main__':
     app.run(debug=True) 
