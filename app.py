@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import ipaddress
-from snmp_operations import scan_ip, check_device_status
+from snmp_operations import scan_ip, check_device_status, get_device_name
 import threading
 import time
 import json
@@ -68,7 +68,17 @@ def check_all_devices():
                             status = check_device_status(device.ip_address, device.snmp_community)
                             device.status = 'active' if status else 'inactive'
                             device.last_checked = datetime.utcnow()
-                            logger.info(f"Device {device.ip_address} status: {device.status}")
+                            
+                            # Try to get device name if status is active
+                            if status and (not device.name or device.name == 'Unknown'):
+                                try:
+                                    name = get_device_name(device.ip_address, device.snmp_community)
+                                    if name:
+                                        device.name = name
+                                except Exception as name_error:
+                                    logger.error(f"Error getting device name for {device.ip_address}: {str(name_error)}")
+                            
+                            logger.info(f"Device {device.ip_address} status: {device.status}, name: {device.name}")
                     except Exception as e:
                         logger.error(f"Error checking device {device.ip_address}: {str(e)}")
                         try:
@@ -159,7 +169,19 @@ def add_device():
         
         # Try to scan the device
         if scan_ip(ip, community):
-            device = Device(ip_address=ip, snmp_community=community, status='active')
+            # Try to get device name
+            name = None
+            try:
+                name = get_device_name(ip, community)
+            except Exception as e:
+                logger.error(f"Error getting device name: {str(e)}")
+            
+            device = Device(
+                ip_address=ip,
+                snmp_community=community,
+                status='active',
+                name=name or 'Unknown'
+            )
             db.session.add(device)
             db.session.commit()
             return redirect(url_for('index'))
@@ -180,7 +202,19 @@ def scan_range():
         
         for ip in network.hosts():
             if scan_ip(str(ip), community):
-                device = Device(ip_address=str(ip), snmp_community=community, status='active')
+                # Try to get device name
+                name = None
+                try:
+                    name = get_device_name(str(ip), community)
+                except Exception as e:
+                    logger.error(f"Error getting device name: {str(e)}")
+                
+                device = Device(
+                    ip_address=str(ip),
+                    snmp_community=community,
+                    status='active',
+                    name=name or 'Unknown'
+                )
                 db.session.add(device)
                 found_devices.append(str(ip))
         
@@ -197,8 +231,17 @@ def check_status(device_id):
     
     device.status = 'active' if status else 'inactive'
     device.last_checked = datetime.utcnow()
-    db.session.commit()
     
+    # Try to get device name if status is active
+    if status and (not device.name or device.name == 'Unknown'):
+        try:
+            name = get_device_name(device.ip_address, device.snmp_community)
+            if name:
+                device.name = name
+        except Exception as e:
+            logger.error(f"Error getting device name: {str(e)}")
+    
+    db.session.commit()
     return redirect(url_for('index'))
 
 @app.route('/delete_device/<int:device_id>', methods=['POST'])

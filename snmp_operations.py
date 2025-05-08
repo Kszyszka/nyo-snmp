@@ -56,4 +56,23 @@ def get_system_info(ip, community='public'):
             }
             
     except Exception:
+        return None
+
+def get_device_name(ip, community='public'):
+    try:
+        error_indication, error_status, error_index, var_binds = next(
+            getCmd(SnmpEngine(),
+                  CommunityData(community),
+                  UdpTransportTarget((ip, 161)),
+                  ContextData(),
+                  ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysName', 0)))
+        )
+        
+        if error_indication is None and error_status == 0:
+            for var_bind in var_binds:
+                name = str(var_bind[1])
+                if name and name != '0':
+                    return name
+        return None
+    except Exception:
         return None 
