@@ -1,68 +1,61 @@
-# SNMP Network Monitor
+# Nyo-SNMP
 
-A Flask-based web application for monitoring network devices using SNMP. This application allows you to:
-- Add individual devices for monitoring
-- Scan IP ranges for SNMP-enabled devices
-- Monitor device status in real-time
-- View device information and status history
+Monitorowanie stanu urządzeń sieciowych za pomocą SNMP i Pythona.
 
-## Requirements
+* Krzysztof Hager 52687
+* Krystian Harasymek 54152
+* Krystian Galus 52676
+* Michał Fuławka 52675
+
+## Funkcje
+
+- Dodawanie indywidualnych urządzeń do monitoringu
+- Skanowanie klas IP w poszukiwaniu urządzeń wspierających SNMP
+- Monitorowanie urządzeń w czasie rzeczywistym
+- Odczyt stanu urządzeń
+
+## Wymagania
 
 - Python 3.7+
 - Flask
 - pysnmp
 - SQLAlchemy
-- Other dependencies listed in requirements.txt
+- Pozostałe zależności z pliku requirements.txt
 
-## Installation
+## Uruchomienie
 
-1. Clone the repository:
+1. Sklonowanie repozytorium:
+
 ```bash
-git clone <repository-url>
-cd snmp-monitor
+git clone https://github.com/Kszyszka/nyo-snmp.git
+cd nyo-snmp
 ```
 
-2. Create a virtual environment and activate it:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. Instalacja wymaganych bibliotek:
 
-3. Install the required packages:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+3. Uruchomienie aplikacji:
 
-1. Start the application:
 ```bash
 python app.py
 ```
 
-2. Open your web browser and navigate to `http://localhost:5000`
+2. Instalacja wymaganych bibliotek:
 
-3. Use the web interface to:
-   - Add individual devices by IP address
-   - Scan IP ranges using CIDR notation (e.g., 192.168.1.0/24)
-   - Monitor device status
-   - View device information
+```bash
+pip install -r requirements.txt
+```
 
-## Features
+4. Otwórz przeglądarkę internetową i przejdź na stronę `http://127.0.0.1:5000`
 
-- Add individual devices for monitoring
-- Scan IP ranges for SNMP-enabled devices
-- Real-time status monitoring
-- Device information display
-- Status history tracking
-- Modern web interface
+## Copyright
 
-## Security Notes
+Aplikacja została wykonana w ramach projektu zaliczeniowego na DSW, autorzy:
 
-- The default SNMP community string is set to 'public'
-- It's recommended to change the community string to a more secure value
-- Consider implementing authentication for the web interface in production
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+* Krzysztof Hager 52687
+* Krystian Harasymek 54152
+* Krystian Galus 52676
+* Michał Fuławka 52675
