@@ -73,6 +73,41 @@
             font-size: 0.875rem;
             display: none;
         }
+
+        /* Add fixed width styles for buttons */
+        .btn-fixed-width {
+            width: 140px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+
+        .btn-fixed-width-sm {
+            width: 120px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+
+        .btn-fixed-width-xs {
+            width: 40px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Ensure buttons maintain height */
+        .btn {
+            height: 38px;
+        }
+
+        .btn-sm {
+            height: 31px;
+        }
     </style>
 </head>
 <body class="bg-light">
@@ -91,8 +126,8 @@
                                name="interval" value="{{ check_interval }}" min="30" style="width: 100px;">
                         <button type="submit" class="btn btn-primary btn-sm">Update</button>
                     </form>
-                    <a href="{{ url_for('check_all_devices_now') }}" class="btn btn-primary me-4">
-                        <i class="fas fa-sync-alt"></i> Check All Devices
+                    <a href="{{ url_for('check_all_devices_now') }}" class="btn btn-primary me-4 btn-fixed-width" id="checkAllDevicesBtn">
+                        <i class="fas fa-sync-alt"></i> Check All
                     </a>
                     <div class="text-muted">
                         <small>Last check: <span id="lastCheckTime">{{ last_check_time.strftime('%H:%M:%S') }}</span></small>
@@ -255,8 +290,12 @@
                                     </td>
                                     <td class="last-checked-cell">{{ device.last_checked.strftime('%Y-%m-%d %H:%M:%S') if device.last_checked else 'Never' }}</td>
                                     <td>
-                                        <button class="btn btn-sm btn-primary check-device" data-ip="{{ device.ip_address }}">Check</button>
-                                        <button class="btn btn-sm btn-danger delete-device" data-ip="{{ device.ip_address }}">Delete</button>
+                                        <button class="btn btn-sm btn-primary check-device btn-fixed-width-sm" data-device-id="{{ device.id }}">
+                                            <i class="fas fa-sync-alt"></i> Check
+                                        </button>
+                                        <button class="btn btn-sm btn-danger delete-device btn-fixed-width-xs" data-device-id="{{ device.id }}">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -287,10 +326,10 @@
                             <span class="notification-time">{{ device.last_checked.strftime('%H:%M:%S') }}</span>
                         </div>
                         <div class="notification-actions">
-                            <button class="btn btn-sm btn-primary check-device" data-device-id="{{ device.id }}">
+                            <button class="btn btn-sm btn-primary check-device btn-fixed-width-sm" data-device-id="{{ device.id }}">
                                 <i class="fas fa-sync-alt"></i> Check Now
                             </button>
-                            <button class="btn btn-sm btn-danger delete-device" data-device-id="{{ device.id }}">
+                            <button class="btn btn-sm btn-danger delete-device btn-fixed-width-xs" data-device-id="{{ device.id }}">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
@@ -407,13 +446,13 @@
                             } else {
                                 alert(data.message || 'Error checking device status');
                                 button.disabled = false;
-                                button.innerHTML = '<i class="fas fa-sync-alt"></i> Check Now';
+                                button.innerHTML = '<i class="fas fa-sync-alt"></i> Check';
                             }
                         })
                         .catch(error => {
                             alert('An error occurred while checking the device');
                             button.disabled = false;
-                            button.innerHTML = '<i class="fas fa-sync-alt"></i> Check Now';
+                            button.innerHTML = '<i class="fas fa-sync-alt"></i> Check';
                         });
                 });
             });
@@ -575,6 +614,34 @@
                             alert('An error occurred while deleting the device');
                         });
                     }
+                });
+            });
+
+            // Add event listeners for check buttons
+            document.querySelectorAll('.check-device').forEach(button => {
+                button.addEventListener('click', function() {
+                    const deviceId = this.dataset.deviceId;
+                    const button = this;
+                    button.disabled = true;
+                    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+                    
+                    fetch(`/check_status/${deviceId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                // Refresh the page to show updated status
+                                window.location.reload();
+                            } else {
+                                alert(data.message || 'Error checking device status');
+                                button.disabled = false;
+                                button.innerHTML = '<i class="fas fa-sync-alt"></i> Check';
+                            }
+                        })
+                        .catch(error => {
+                            alert('An error occurred while checking the device');
+                            button.disabled = false;
+                            button.innerHTML = '<i class="fas fa-sync-alt"></i> Check';
+                        });
                 });
             });
 
@@ -902,7 +969,33 @@
                 console.log('Notifications are not supported in this browser');
             }
             
-            // Rest of the DOMContentLoaded code...
+            // Add click handler for Check All Devices button
+            const checkAllBtn = document.getElementById('checkAllDevicesBtn');
+            if (checkAllBtn) {
+                checkAllBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const button = this;
+                    button.disabled = true;
+                    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+                    
+                    fetch(button.href)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                window.location.reload();
+                            } else {
+                                alert(data.message || 'Error checking devices');
+                                button.disabled = false;
+                                button.innerHTML = '<i class="fas fa-sync-alt"></i> Check All';
+                            }
+                        })
+                        .catch(error => {
+                            alert('An error occurred while checking devices');
+                            button.disabled = false;
+                            button.innerHTML = '<i class="fas fa-sync-alt"></i> Check All';
+                        });
+                });
+            }
         });
     </script>
 </body>
