@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, R
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import ipaddress
-from snmp_operations import scan_ip, check_device_status, get_device_name, find_active_ips
+from snmp_operations import scan_ip, check_device_status, get_device_name, find_active_ips, get_system_metrics
 import threading
 import time
 import json
@@ -60,6 +60,10 @@ class Device(db.Model):
     status = db.Column(db.String(20))
     last_checked = db.Column(db.DateTime, default=datetime.utcnow)
     snmp_community = db.Column(db.String(50), default='public')
+    uptime = db.Column(db.String(50))
+    cpu_usage = db.Column(db.Float)
+    memory_used = db.Column(db.Integer)  # in MB
+    memory_total = db.Column(db.Integer)  # in MB
 
 def check_all_devices():
     global current_check_interval, last_check_time, checking_active, check_cycle_complete
@@ -84,14 +88,27 @@ def check_all_devices():
                             device.status = 'active' if status else 'inactive'
                             device.last_checked = datetime.utcnow()
                             
-                            # Try to get device name if status is active
-                            if status and (not device.name or device.name == 'Unknown'):
+                            # If device is active, get additional metrics
+                            if status:
+                                # Try to get device name if needed
+                                if not device.name or device.name == 'Unknown':
+                                    try:
+                                        name = get_device_name(device.ip_address, device.snmp_community)
+                                        if name:
+                                            device.name = name
+                                    except Exception as name_error:
+                                        logger.error(f"Error getting device name for {device.ip_address}: {str(name_error)}")
+                                
+                                # Get system metrics
                                 try:
-                                    name = get_device_name(device.ip_address, device.snmp_community)
-                                    if name:
-                                        device.name = name
-                                except Exception as name_error:
-                                    logger.error(f"Error getting device name for {device.ip_address}: {str(name_error)}")
+                                    metrics = get_system_metrics(device.ip_address, device.snmp_community)
+                                    if metrics:
+                                        device.uptime = metrics['uptime']
+                                        device.cpu_usage = metrics['cpu_usage']
+                                        device.memory_used = metrics['memory_used']
+                                        device.memory_total = metrics['memory_total']
+                                except Exception as metrics_error:
+                                    logger.error(f"Error getting metrics for {device.ip_address}: {str(metrics_error)}")
                             
                             logger.info(f"Device {device.ip_address} status: {device.status}, name: {device.name}")
                     except Exception as e:
