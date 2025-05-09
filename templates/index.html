@@ -560,64 +560,98 @@
         
         // Modify the existing refreshData function to preserve search/filter
         function refreshData() {
+            console.log('Starting data refresh...');
             const currentSearch = deviceSearch.value;
             const currentFilterState = currentFilter;
             
-            fetch(window.location.href)
-                .then(response => response.text())
-                .then(html => {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(html, 'text/html');
-                    
-                    // Get current device statuses before update
-                    const currentStatuses = {};
-                    document.querySelectorAll('tbody tr').forEach(row => {
-                        const ip = row.querySelector('td:nth-child(2)').textContent;
-                        const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
-                        currentStatuses[ip] = status;
-                    });
-                    
-                    // Update device statuses and last checked times
-                    const newRows = doc.querySelectorAll('tbody tr');
-                    const tbody = document.querySelector('tbody');
-                    tbody.innerHTML = '';
-                    newRows.forEach(row => {
-                        tbody.appendChild(row.cloneNode(true));
-                    });
-                    
-                    // Check for status changes and trigger notifications
-                    newRows.forEach(row => {
-                        const ip = row.querySelector('td:nth-child(2)').textContent;
-                        const name = row.querySelector('td:nth-child(3)').textContent;
-                        const newStatus = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
-                        const oldStatus = currentStatuses[ip];
-                        
-                        if (oldStatus === 'active' && newStatus === 'inactive') {
-                            console.log('Status change detected during refresh:', { ip, oldStatus, newStatus });
-                            showStatusChangeNotification({
-                                ip_address: ip,
-                                name: name,
-                                status: newStatus
+            // Update last check time first
+            fetch('{{ url_for("get_last_check_time") }}')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Last check time response:', data);
+                    const timeElement = document.getElementById('lastCheckTime');
+                    if (timeElement) {
+                        // Only update the time if it's from a completed check cycle
+                        if (data.check_cycle_complete) {
+                            const serverTime = new Date(data.last_check_time);
+                            timeElement.dataset.timestamp = serverTime.getTime() / 1000;
+                            timeElement.textContent = serverTime.toLocaleTimeString('en-US', {
+                                hour12: false,
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                             });
                         }
-                    });
+                    }
                     
-                    // Reattach event listeners to the new rows
-                    attachTableEventListeners();
+                    // Refresh the page if check cycle completed or interval changed
+                    if (data.check_cycle_complete || data.interval_changed) {
+                        console.log('Check cycle completed or interval changed, refreshing page...');
+                        window.location.reload();
+                        return;
+                    }
                     
-                    // Update notifications
-                    updateNotifications(html);
-                    
-                    // Update last check time
-                    updateLastCheckTime();
-                    
-                    // Restore search and filter state
-                    deviceSearch.value = currentSearch;
-                    currentFilter = currentFilterState;
-                    filterDevices();
+                    // Continue with normal refresh if no cycle completion
+                    fetch(window.location.href)
+                        .then(response => response.text())
+                        .then(html => {
+                            console.log('Fetched new page content');
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(html, 'text/html');
+                            
+                            // Get current device statuses before update
+                            const currentStatuses = {};
+                            document.querySelectorAll('tbody tr').forEach(row => {
+                                const ip = row.querySelector('td:nth-child(2)').textContent;
+                                const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                                currentStatuses[ip] = status;
+                            });
+                            
+                            // Update device statuses and last checked times
+                            const newRows = doc.querySelectorAll('tbody tr');
+                            const tbody = document.querySelector('tbody');
+                            tbody.innerHTML = '';
+                            newRows.forEach(row => {
+                                tbody.appendChild(row.cloneNode(true));
+                            });
+                            
+                            // Check for status changes and trigger notifications
+                            newRows.forEach(row => {
+                                const ip = row.querySelector('td:nth-child(2)').textContent;
+                                const name = row.querySelector('td:nth-child(3)').textContent;
+                                const newStatus = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                                const oldStatus = currentStatuses[ip];
+                                
+                                if (oldStatus === 'active' && newStatus === 'inactive') {
+                                    console.log('Status change detected during refresh:', { ip, oldStatus, newStatus });
+                                    showStatusChangeNotification({
+                                        ip_address: ip,
+                                        name: name,
+                                        status: newStatus
+                                    });
+                                }
+                            });
+                            
+                            // Reattach event listeners to the new rows
+                            attachTableEventListeners();
+                            
+                            // Update notifications
+                            updateNotifications(html);
+                            
+                            // Restore search and filter state
+                            deviceSearch.value = currentSearch;
+                            currentFilter = currentFilterState;
+                            filterDevices();
+                            
+                            console.log('Data refresh completed');
+                        })
+                        .catch(error => {
+                            console.error('Error refreshing data:', error);
+                        });
                 })
                 .catch(error => {
-                    console.error('Error refreshing data:', error);
+                    console.error('Error updating last check time:', error);
                 });
         }
 
@@ -680,9 +714,39 @@
 
         // Refresh data every 60 seconds (1 minute)
         setInterval(refreshData, 60000);
-        
-        // Also update last check time every 5 seconds
-        setInterval(updateLastCheckTime, 5000);
+
+        // Update last check time every 5 seconds
+        setInterval(function() {
+            fetch('{{ url_for("get_last_check_time") }}')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Last check time update:', data);
+                    const timeElement = document.getElementById('lastCheckTime');
+                    if (timeElement) {
+                        // Only update the time if it's from a completed check cycle
+                        if (data.check_cycle_complete) {
+                            const serverTime = new Date(data.last_check_time);
+                            timeElement.dataset.timestamp = serverTime.getTime() / 1000;
+                            timeElement.textContent = serverTime.toLocaleTimeString('en-US', {
+                                hour12: false,
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                            });
+                        }
+                    }
+                    
+                    // Refresh the page if check cycle completed or interval changed
+                    if (data.check_cycle_complete || data.interval_changed) {
+                        console.log('Check cycle completed or interval changed, refreshing page...');
+                        window.location.reload();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error updating last check time:', error);
+                });
+        }, 5000);
 
         // Scan Range Form Handler
         document.getElementById('scanRangeForm').addEventListener('submit', function(e) {

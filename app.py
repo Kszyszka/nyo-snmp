@@ -12,9 +12,18 @@ import queue
 from flask_sse import sse
 
 # Configure logging
-logging.basicConfig(level=logging.INFO,
-                   format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Output to console
+        logging.FileHandler('app.log')  # Output to file
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Set Flask's logger to INFO level
+logging.getLogger('werkzeug').setLevel(logging.INFO)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///devices.db'
@@ -68,13 +77,21 @@ class Device(db.Model):
 
 def check_all_devices():
     """Check status of all devices in the database"""
+    global last_check_time, check_cycle_complete
+    logger.info("[check_all_devices] Starting device check cycle")
     with app.app_context():
         devices = Device.query.all()
+        logger.info(f"[check_all_devices] Checking {len(devices)} devices")
+        
+        # Set the check start time
+        check_start_time = get_local_time()
+        
         for device in devices:
             try:
                 # Check if device is responding to SNMP
                 is_active = check_device_status(device.ip_address, device.snmp_community)
                 device.status = 'active' if is_active else 'inactive'
+                logger.info(f"[check_all_devices] Device {device.ip_address} status: {device.status}")
                 
                 # If device is active, try to get its name and metrics
                 if is_active:
@@ -84,8 +101,9 @@ def check_all_devices():
                             device_name = get_device_name(device.ip_address, device.snmp_community)
                             if device_name:
                                 device.name = device_name
+                                logger.info(f"[check_all_devices] Updated device name for {device.ip_address}: {device_name}")
                         except Exception as e:
-                            logging.error(f"Error getting device name for {device.ip_address}: {str(e)}")
+                            logger.error(f"[check_all_devices] Error getting device name for {device.ip_address}: {str(e)}")
                     
                     # Get system metrics
                     try:
@@ -95,19 +113,38 @@ def check_all_devices():
                             device.cpu_usage = metrics.get('cpu_usage')
                             device.memory_used = metrics.get('memory_used')
                             device.memory_total = metrics.get('memory_total')
+                            logger.info(f"[check_all_devices] Updated metrics for {device.ip_address}")
                     except Exception as e:
-                        logging.error(f"Error getting metrics for {device.ip_address}: {str(e)}")
+                        logger.error(f"[check_all_devices] Error getting metrics for {device.ip_address}: {str(e)}")
                 
-                device.last_checked = datetime.now(timezone.utc)
+                device.last_checked = check_start_time
                 db.session.commit()
             except Exception as e:
-                logging.error(f"Error checking device {device.ip_address}: {str(e)}")
+                logger.error(f"[check_all_devices] Error checking device {device.ip_address}: {str(e)}")
                 device.status = 'inactive'
-                device.last_checked = datetime.now(timezone.utc)
+                device.last_checked = check_start_time
                 db.session.commit()
+        
+        # Update last check time and set cycle complete flag
+        last_check_time = check_start_time
+        check_cycle_complete = True
+        logger.info(f"[check_all_devices] Completed device check cycle at {last_check_time}, check_cycle_complete set to True")
+
+def background_checker():
+    """Background thread that periodically checks all devices"""
+    global current_check_interval
+    logger.info(f"[background_checker] Started with interval: {current_check_interval} seconds")
+    while True:
+        try:
+            check_all_devices()
+            logger.info(f"[background_checker] Sleeping for {current_check_interval} seconds before next check")
+            time.sleep(current_check_interval)
+        except Exception as e:
+            logger.error(f"[background_checker] Error: {str(e)}")
+            time.sleep(30)  # Wait 30 seconds before retrying if there's an error
 
 # Start the background checking thread
-checking_thread = threading.Thread(target=check_all_devices, daemon=True)
+checking_thread = threading.Thread(target=background_checker, daemon=True)
 checking_thread.start()
 
 with app.app_context():
@@ -129,6 +166,7 @@ def index():
 @app.route('/get_last_check_time')
 def get_last_check_time():
     global last_check_time, check_cycle_complete, interval_changed
+    logger.info(f"[get_last_check_time] Called - Last check: {last_check_time}, Cycle complete: {check_cycle_complete}, Interval changed: {interval_changed}")
     response = {
         'last_check_time': get_local_time().strftime('%Y-%m-%d %H:%M:%S'),
         'check_cycle_complete': check_cycle_complete,
@@ -137,6 +175,7 @@ def get_last_check_time():
     # Reset the flags after sending
     check_cycle_complete = False
     interval_changed = False
+    logger.info(f"[get_last_check_time] Response: {response}")
     return jsonify(response)
 
 @app.route('/update_check_interval', methods=['POST'])
