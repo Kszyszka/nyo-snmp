@@ -286,7 +286,18 @@
             fetch('{{ url_for("get_last_check_time") }}')
                 .then(response => response.json())
                 .then(data => {
-                    document.getElementById('lastCheckTime').textContent = data.last_check_time.split(' ')[1];
+                    const timeElement = document.getElementById('lastCheckTime');
+                    if (timeElement) {
+                        timeElement.textContent = data.last_check_time.split(' ')[1];
+                    }
+                    
+                    // Refresh the page if check cycle completed or interval changed
+                    if (data.check_cycle_complete || data.interval_changed) {
+                        window.location.reload();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error updating last check time:', error);
                 });
         }
 
@@ -360,7 +371,12 @@
                     
                     // Update notifications
                     updateNotifications(html);
+                    
+                    // Update last check time
                     updateLastCheckTime();
+                })
+                .catch(error => {
+                    console.error('Error refreshing data:', error);
                 });
         }
 
@@ -395,6 +411,9 @@
 
         // Refresh data every 60 seconds (1 minute)
         setInterval(refreshData, 60000);
+        
+        // Also update last check time every 5 seconds
+        setInterval(updateLastCheckTime, 5000);
 
         // Scan Range Form Handler
         document.getElementById('scanRangeForm').addEventListener('submit', function(e) {

@@ -29,9 +29,11 @@ DEFAULT_CONFIG = {
 }
 
 # Global variables
-current_check_interval = DEFAULT_CONFIG['check_interval']
+current_check_interval = None
 last_check_time = datetime.utcnow()
 checking_active = True
+check_cycle_complete = False
+interval_changed = False
 
 # Global progress queue for scan updates
 scan_progress_queue = queue.Queue()
@@ -46,6 +48,11 @@ def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f)
 
+# Initialize current_check_interval from config
+config = load_config()
+current_check_interval = config['check_interval']
+logger.info(f"Initialized check interval to {current_check_interval} seconds from config")
+
 class Device(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     ip_address = db.Column(db.String(15), unique=True, nullable=False)
@@ -55,10 +62,14 @@ class Device(db.Model):
     snmp_community = db.Column(db.String(50), default='public')
 
 def check_all_devices():
-    global current_check_interval, last_check_time, checking_active
+    global current_check_interval, last_check_time, checking_active, check_cycle_complete
     with app.app_context():
         while checking_active:
             try:
+                # Reload config to ensure we have the latest interval
+                config = load_config()
+                current_check_interval = config['check_interval']
+                
                 cycle_start_time = time.time()
                 logger.info(f"Starting device check cycle. Current interval: {current_check_interval} seconds")
                 
@@ -97,14 +108,15 @@ def check_all_devices():
                 try:
                     db.session.commit()
                     last_check_time = datetime.utcnow()
+                    check_cycle_complete = True
+                    logger.info(f"Updated last check time to: {last_check_time}")
                 except Exception as commit_error:
                     logger.error(f"Error committing changes: {str(commit_error)}")
                     db.session.rollback()
                 
-                # Calculate next cycle start time
+                # Calculate sleep time to maintain exact interval
                 elapsed_time = time.time() - cycle_start_time
-                next_cycle_time = cycle_start_time + current_check_interval
-                sleep_time = max(0, next_cycle_time - time.time())
+                sleep_time = max(0, current_check_interval - elapsed_time)
                 
                 logger.info(f"Check cycle completed in {elapsed_time:.2f} seconds. Next cycle in {sleep_time:.2f} seconds")
                 
@@ -135,11 +147,20 @@ def index():
 
 @app.route('/get_last_check_time')
 def get_last_check_time():
-    return jsonify({'last_check_time': last_check_time.strftime('%Y-%m-%d %H:%M:%S')})
+    global last_check_time, check_cycle_complete, interval_changed
+    response = {
+        'last_check_time': last_check_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'check_cycle_complete': check_cycle_complete,
+        'interval_changed': interval_changed
+    }
+    # Reset the flags after sending
+    check_cycle_complete = False
+    interval_changed = False
+    return jsonify(response)
 
 @app.route('/update_check_interval', methods=['POST'])
 def update_check_interval():
-    global current_check_interval
+    global current_check_interval, interval_changed
     try:
         interval = int(request.form.get('interval', 300))
         if interval < 30:  # Minimum 30 seconds
@@ -151,6 +172,7 @@ def update_check_interval():
         
         # Update the global interval variable immediately
         current_check_interval = interval
+        interval_changed = True
         logger.info(f"Check interval updated to {interval} seconds")
         
         return jsonify({'message': 'Check interval updated successfully'})
