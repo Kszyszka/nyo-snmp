@@ -731,41 +731,50 @@
             });
         }
 
-        // Refresh data every 60 seconds (1 minute)
-        setInterval(refreshData, 60000);
+        // Add a variable to track if scanning is in progress
+        let isScanning = false;
+        let refreshInterval = null;
 
-        // Update last check time every 5 seconds
-        setInterval(function() {
-            fetch('{{ url_for("get_last_check_time") }}')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Last check time update:', data);
-                    const timeElement = document.getElementById('lastCheckTime');
-                    if (timeElement) {
-                        // Only update the time if it's from a completed check cycle
-                        if (data.check_cycle_complete) {
-                            const serverTime = new Date(data.last_check_time);
-                            timeElement.dataset.timestamp = serverTime.getTime() / 1000;
-                            timeElement.textContent = serverTime.toLocaleTimeString('en-US', {
-                                hour12: false,
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                second: '2-digit',
-                                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                            });
-                        }
-                    }
-                    
-                    // Refresh the page if check cycle completed or interval changed
-                    if (data.check_cycle_complete || data.interval_changed) {
-                        console.log('Check cycle completed or interval changed, refreshing page...');
-                        window.location.reload();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error updating last check time:', error);
-                });
-        }, 5000);
+        // Function to start automatic refreshes
+        function startAutoRefresh() {
+            if (!refreshInterval) {
+                console.log('Starting automatic refreshes');
+                refreshInterval = setInterval(refreshData, 60000);
+            }
+        }
+
+        // Function to stop automatic refreshes
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                console.log('Stopping automatic refreshes');
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        }
+
+        // Start automatic refreshes when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            startAutoRefresh();
+            
+            // Request notification permission
+            if ('Notification' in window) {
+                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                    Notification.requestPermission();
+                }
+            }
+            
+            // Initialize notification badge
+            const badge = document.getElementById('notificationBadge');
+            if (badge) {
+                const inactiveCount = document.querySelectorAll('.notification-item').length;
+                badge.textContent = inactiveCount;
+                badge.style.display = inactiveCount > 0 ? 'block' : 'none';
+            }
+            
+            // Attach event listeners
+            attachNotificationEventListeners();
+            attachTableEventListeners();
+        });
 
         // Scan Range Form Handler
         document.getElementById('scanRangeForm').addEventListener('submit', function(e) {
@@ -784,6 +793,10 @@
                 alert('Please enter an IP range');
                 return;
             }
+            
+            // Stop automatic refreshes and set scanning flag
+            stopAutoRefresh();
+            isScanning = true;
             
             // Disable scan button and show progress
             scanButton.disabled = true;
@@ -834,6 +847,10 @@
                             // Close the event source
                             eventSource.close();
                             
+                            // Reset scanning flag and restart automatic refreshes
+                            isScanning = false;
+                            startAutoRefresh();
+                            
                             // Reload the page after a short delay
                             setTimeout(() => {
                                 window.location.reload();
@@ -852,6 +869,11 @@
                 eventSource.onerror = function(error) {
                     console.error('EventSource error:', error);
                     eventSource.close();
+                    
+                    // Reset scanning flag and restart automatic refreshes on error
+                    isScanning = false;
+                    startAutoRefresh();
+                    
                     throw new Error('Lost connection to server');
                 };
             })
@@ -872,6 +894,10 @@
                 progressText.textContent = '0%';
                 foundDevices.textContent = '0';
                 activeIpsCount.textContent = '0';
+                
+                // Reset scanning flag and restart automatic refreshes on error
+                isScanning = false;
+                startAutoRefresh();
             })
             .finally(() => {
                 // Re-enable scan button
