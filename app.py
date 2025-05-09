@@ -198,31 +198,51 @@ def scan_range():
     
     try:
         network = ipaddress.ip_network(ip_range, strict=False)
+        total_ips = sum(1 for _ in network.hosts())
         found_devices = []
         
         for ip in network.hosts():
-            if scan_ip(str(ip), community):
+            ip_str = str(ip)
+            # Check if device already exists
+            existing_device = Device.query.filter_by(ip_address=ip_str).first()
+            if existing_device:
+                continue
+                
+            # Try to scan the device
+            if scan_ip(ip_str, community):
                 # Try to get device name
                 name = None
                 try:
-                    name = get_device_name(str(ip), community)
+                    name = get_device_name(ip_str, community)
                 except Exception as e:
                     logger.error(f"Error getting device name: {str(e)}")
                 
                 device = Device(
-                    ip_address=str(ip),
+                    ip_address=ip_str,
                     snmp_community=community,
                     status='active',
                     name=name or 'Unknown'
                 )
                 db.session.add(device)
-                found_devices.append(str(ip))
+                found_devices.append(ip_str)
         
         db.session.commit()
-        return jsonify({'message': f'Found {len(found_devices)} devices', 'devices': found_devices})
+        return jsonify({
+            'message': f'Found {len(found_devices)} new devices',
+            'devices': found_devices,
+            'total_ips': total_ips
+        })
         
     except ValueError:
         return jsonify({'error': 'Invalid IP range'}), 400
+
+@app.route('/scan_progress')
+def scan_progress():
+    return jsonify({
+        'progress': request.args.get('progress', 0),
+        'found': request.args.get('found', 0),
+        'total': request.args.get('total', 0)
+    })
 
 @app.route('/check_status/<int:device_id>')
 def check_status(device_id):

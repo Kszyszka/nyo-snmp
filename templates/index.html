@@ -141,10 +141,24 @@
                                 <input type="text" class="form-control" id="range_snmp_community" name="snmp_community" value="public">
                             </div>
                             <div class="col-md-2 mb-3 d-flex align-items-end">
-                                <button type="submit" class="btn btn-success w-100">Scan Range</button>
+                                <button type="submit" class="btn btn-success w-100" id="scanButton">
+                                    <i class="fas fa-search"></i> Scan Range
+                                </button>
                             </div>
                         </div>
                     </form>
+                    <!-- Progress Bar -->
+                    <div id="scanProgress" class="mt-3" style="display: none;">
+                        <div class="progress mb-2">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <div class="text-center">
+                            <small class="text-muted">
+                                Scanning: <span id="scanProgressText">0%</span>
+                                (<span id="scanFoundDevices">0</span> devices found)
+                            </small>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -385,6 +399,18 @@
         document.getElementById('scanRangeForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);
+            const scanButton = document.getElementById('scanButton');
+            const progressDiv = document.getElementById('scanProgress');
+            const progressBar = progressDiv.querySelector('.progress-bar');
+            const progressText = document.getElementById('scanProgressText');
+            const foundDevices = document.getElementById('scanFoundDevices');
+            
+            // Disable scan button and show progress
+            scanButton.disabled = true;
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = '0%';
+            foundDevices.textContent = '0';
             
             fetch('{{ url_for("scan_range") }}', {
                 method: 'POST',
@@ -395,12 +421,26 @@
                 if (data.error) {
                     alert(data.error);
                 } else {
+                    // Update progress to 100%
+                    progressBar.style.width = '100%';
+                    progressText.textContent = '100%';
+                    foundDevices.textContent = data.devices.length;
+                    
+                    // Show success message
                     alert(data.message);
-                    window.location.reload();
+                    
+                    // Reload the page after a short delay
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
                 }
             })
             .catch(error => {
                 alert('An error occurred while scanning the range');
+            })
+            .finally(() => {
+                // Re-enable scan button
+                scanButton.disabled = false;
             });
         });
 
