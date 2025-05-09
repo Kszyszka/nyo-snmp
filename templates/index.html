@@ -154,8 +154,9 @@
                         </div>
                         <div class="text-center">
                             <small class="text-muted">
-                                Scanning: <span id="scanProgressText">0%</span>
-                                (<span id="scanFoundDevices">0</span> devices found)
+                                <div>Active IPs found: <span id="activeIpsCount">0</span></div>
+                                <div>Scanning progress: <span id="scanProgressText">0%</span></div>
+                                <div>Devices found: <span id="scanFoundDevices">0</span></div>
                             </small>
                         </div>
                     </div>
@@ -404,6 +405,14 @@
             const progressBar = progressDiv.querySelector('.progress-bar');
             const progressText = document.getElementById('scanProgressText');
             const foundDevices = document.getElementById('scanFoundDevices');
+            const activeIpsCount = document.getElementById('activeIpsCount');
+            
+            // Validate IP range format
+            const ipRange = formData.get('ip_range');
+            if (!ipRange) {
+                alert('Please enter an IP range');
+                return;
+            }
             
             // Disable scan button and show progress
             scanButton.disabled = true;
@@ -411,7 +420,9 @@
             progressBar.style.width = '0%';
             progressText.textContent = '0%';
             foundDevices.textContent = '0';
+            activeIpsCount.textContent = '0';
             
+            // Start the scan
             fetch('{{ url_for("scan_range") }}', {
                 method: 'POST',
                 body: formData
@@ -419,24 +430,77 @@
             .then(response => response.json())
             .then(data => {
                 if (data.error) {
-                    alert(data.error);
-                } else {
-                    // Update progress to 100%
-                    progressBar.style.width = '100%';
-                    progressText.textContent = '100%';
-                    foundDevices.textContent = data.devices.length;
-                    
-                    // Show success message
-                    alert(data.message);
-                    
-                    // Reload the page after a short delay
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
+                    throw new Error(data.error);
                 }
+                
+                // Connect to SSE endpoint for progress updates
+                const eventSource = new EventSource('{{ url_for("scan_progress") }}');
+                
+                eventSource.onmessage = function(event) {
+                    const progress = JSON.parse(event.data);
+                    
+                    switch(progress.type) {
+                        case 'active_ips':
+                            activeIpsCount.textContent = progress.count;
+                            break;
+                            
+                        case 'progress':
+                            const percentage = Math.round((progress.scanned / progress.total) * 100);
+                            progressBar.style.width = `${percentage}%`;
+                            progressText.textContent = `${percentage}%`;
+                            foundDevices.textContent = progress.found;
+                            break;
+                            
+                        case 'complete':
+                            progressBar.style.width = '100%';
+                            progressText.textContent = '100%';
+                            foundDevices.textContent = progress.found;
+                            activeIpsCount.textContent = progress.active_ips;
+                            
+                            // Show success message
+                            alert(progress.message);
+                            
+                            // Close the event source
+                            eventSource.close();
+                            
+                            // Reload the page after a short delay
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 1000);
+                            break;
+                            
+                        case 'error':
+                            throw new Error(progress.error);
+                            
+                        case 'heartbeat':
+                            // Keep connection alive
+                            break;
+                    }
+                };
+                
+                eventSource.onerror = function(error) {
+                    console.error('EventSource error:', error);
+                    eventSource.close();
+                    throw new Error('Lost connection to server');
+                };
             })
             .catch(error => {
-                alert('An error occurred while scanning the range');
+                console.error('Scan error:', error);
+                
+                let errorMessage = 'An error occurred while scanning the range';
+                if (error.name === 'AbortError') {
+                    errorMessage = 'Scan operation timed out. Please try again with a smaller IP range.';
+                } else if (error.name === 'TypeError' && error.message.includes('NetworkError')) {
+                    errorMessage = 'Network error. Please check your connection and try again.';
+                } else if (error.message) {
+                    errorMessage = error.message;
+                }
+                
+                alert(errorMessage);
+                progressBar.style.width = '0%';
+                progressText.textContent = '0%';
+                foundDevices.textContent = '0';
+                activeIpsCount.textContent = '0';
             })
             .finally(() => {
                 // Re-enable scan button

@@ -1,13 +1,14 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import ipaddress
-from snmp_operations import scan_ip, check_device_status, get_device_name
+from snmp_operations import scan_ip, check_device_status, get_device_name, find_active_ips
 import threading
 import time
 import json
 import os
 import logging
+import queue
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -31,6 +32,9 @@ DEFAULT_CONFIG = {
 current_check_interval = DEFAULT_CONFIG['check_interval']
 last_check_time = datetime.utcnow()
 checking_active = True
+
+# Global progress queue for scan updates
+scan_progress_queue = queue.Queue()
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -191,58 +195,124 @@ def add_device():
     except ValueError:
         return jsonify({'error': 'Invalid IP address'}), 400
 
+def scan_range_worker(ip_range, community):
+    # Create application context for the background thread
+    with app.app_context():
+        try:
+            network = ipaddress.ip_network(ip_range, strict=False)
+            total_ips = sum(1 for _ in network.hosts())
+            
+            # Find active IPs
+            active_ips = find_active_ips(ip_range)
+            scan_progress_queue.put({
+                'type': 'active_ips',
+                'count': len(active_ips),
+                'total': total_ips
+            })
+            
+            found_devices = []
+            scanned_count = 0
+            
+            for ip in active_ips:
+                try:
+                    # Check if device already exists
+                    existing_device = Device.query.filter_by(ip_address=ip).first()
+                    if existing_device:
+                        continue
+                        
+                    # Try to scan the device
+                    if scan_ip(ip, community):
+                        # Try to get device name
+                        name = None
+                        try:
+                            name = get_device_name(ip, community)
+                        except Exception as e:
+                            logger.error(f"Error getting device name for {ip}: {str(e)}")
+                        
+                        device = Device(
+                            ip_address=ip,
+                            snmp_community=community,
+                            status='active',
+                            name=name or 'Unknown'
+                        )
+                        db.session.add(device)
+                        found_devices.append(ip)
+                    
+                    scanned_count += 1
+                    scan_progress_queue.put({
+                        'type': 'progress',
+                        'scanned': scanned_count,
+                        'total': len(active_ips),
+                        'found': len(found_devices)
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error scanning {ip}: {str(e)}")
+                    continue
+            
+            try:
+                db.session.commit()
+                scan_progress_queue.put({
+                    'type': 'complete',
+                    'message': f'Found {len(found_devices)} new devices',
+                    'devices': found_devices,
+                    'total_ips': total_ips,
+                    'active_ips': len(active_ips),
+                    'scanned': scanned_count
+                })
+            except Exception as e:
+                logger.error(f"Database error: {str(e)}")
+                db.session.rollback()
+                scan_progress_queue.put({
+                    'type': 'error',
+                    'error': f'Database error: {str(e)}'
+                })
+                
+        except Exception as e:
+            logger.error(f"Unexpected error in scan_range_worker: {str(e)}")
+            scan_progress_queue.put({
+                'type': 'error',
+                'error': f'Unexpected error: {str(e)}'
+            })
+
 @app.route('/scan_range', methods=['POST'])
 def scan_range():
-    ip_range = request.form.get('ip_range')
-    community = request.form.get('snmp_community', 'public')
-    
     try:
-        network = ipaddress.ip_network(ip_range, strict=False)
-        total_ips = sum(1 for _ in network.hosts())
-        found_devices = []
+        ip_range = request.form.get('ip_range')
+        community = request.form.get('snmp_community', 'public')
         
-        for ip in network.hosts():
-            ip_str = str(ip)
-            # Check if device already exists
-            existing_device = Device.query.filter_by(ip_address=ip_str).first()
-            if existing_device:
-                continue
-                
-            # Try to scan the device
-            if scan_ip(ip_str, community):
-                # Try to get device name
-                name = None
-                try:
-                    name = get_device_name(ip_str, community)
-                except Exception as e:
-                    logger.error(f"Error getting device name: {str(e)}")
-                
-                device = Device(
-                    ip_address=ip_str,
-                    snmp_community=community,
-                    status='active',
-                    name=name or 'Unknown'
-                )
-                db.session.add(device)
-                found_devices.append(ip_str)
+        if not ip_range:
+            return jsonify({'error': 'IP range is required'}), 400
+            
+        # Start scan in background thread
+        thread = threading.Thread(target=scan_range_worker, args=(ip_range, community))
+        thread.daemon = True
+        thread.start()
         
-        db.session.commit()
-        return jsonify({
-            'message': f'Found {len(found_devices)} new devices',
-            'devices': found_devices,
-            'total_ips': total_ips
-        })
-        
-    except ValueError:
-        return jsonify({'error': 'Invalid IP range'}), 400
+        return jsonify({'message': 'Scan started'})
+            
+    except Exception as e:
+        logger.error(f"Error starting scan: {str(e)}")
+        return jsonify({'error': f'Error starting scan: {str(e)}'}), 500
 
 @app.route('/scan_progress')
 def scan_progress():
-    return jsonify({
-        'progress': request.args.get('progress', 0),
-        'found': request.args.get('found', 0),
-        'total': request.args.get('total', 0)
-    })
+    def generate():
+        while True:
+            try:
+                # Get progress update from queue
+                progress = scan_progress_queue.get(timeout=30)
+                yield f"data: {json.dumps(progress)}\n\n"
+                
+                # If scan is complete or error occurred, stop sending updates
+                if progress['type'] in ['complete', 'error']:
+                    break
+                    
+            except queue.Empty:
+                # No updates for 30 seconds, send heartbeat
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                
+    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/check_status/<int:device_id>')
 def check_status(device_id):
