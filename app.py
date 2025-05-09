@@ -129,6 +129,8 @@ def check_all_devices():
         last_check_time = check_start_time
         check_cycle_complete = True
         logger.info(f"[check_all_devices] Completed device check cycle at {last_check_time}, check_cycle_complete set to True")
+        # Add a small delay to ensure the flag is noticed
+        time.sleep(0.1)
 
 def background_checker():
     """Background thread that periodically checks all devices"""
@@ -136,9 +138,12 @@ def background_checker():
     logger.info(f"[background_checker] Started with interval: {current_check_interval} seconds")
     while True:
         try:
+            logger.info("[background_checker] Starting new check cycle")
             check_all_devices()
-            logger.info(f"[background_checker] Sleeping for {current_check_interval} seconds before next check")
-            time.sleep(current_check_interval)
+            logger.info(f"[background_checker] Check cycle completed, sleeping for {current_check_interval} seconds")
+            # Sleep in smaller intervals to be more responsive
+            for _ in range(current_check_interval):
+                time.sleep(1)
         except Exception as e:
             logger.error(f"[background_checker] Error: {str(e)}")
             time.sleep(30)  # Wait 30 seconds before retrying if there's an error
@@ -167,14 +172,29 @@ def index():
 def get_last_check_time():
     global last_check_time, check_cycle_complete, interval_changed
     logger.info(f"[get_last_check_time] Called - Last check: {last_check_time}, Cycle complete: {check_cycle_complete}, Interval changed: {interval_changed}")
+    
+    # Store the current state of check_cycle_complete before resetting
+    current_cycle_complete = check_cycle_complete
+    
+    # Calculate time since last check
+    current_time = get_local_time()
+    time_since_last_check = (current_time - last_check_time).total_seconds()
+    
+    # If a check was completed in the last 10 seconds, consider it as completed
+    if time_since_last_check < 10 and not current_cycle_complete:
+        logger.info(f"[get_last_check_time] Recent check detected ({time_since_last_check:.1f} seconds ago)")
+        current_cycle_complete = True
+    
     response = {
-        'last_check_time': get_local_time().strftime('%Y-%m-%d %H:%M:%S'),
-        'check_cycle_complete': check_cycle_complete,
+        'last_check_time': current_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'check_cycle_complete': current_cycle_complete,
         'interval_changed': interval_changed
     }
-    # Reset the flags after sending
+    
+    # Reset the flags after storing them in the response
     check_cycle_complete = False
     interval_changed = False
+    
     logger.info(f"[get_last_check_time] Response: {response}")
     return jsonify(response)
 

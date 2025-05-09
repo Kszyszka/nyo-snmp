@@ -382,11 +382,73 @@
             });
         }
 
+        // Dodaj zmienną do śledzenia czy skanowanie jest w toku
+        let isScanning = false;
+        let refreshInterval = null;
+        let lastCheckInterval = null;
+
+        // Funkcja do uruchamiania automatycznych odświeżeń
+        function startAutoRefresh() {
+            if (!refreshInterval) {
+                console.log('Uruchamianie automatycznych odświeżeń');
+                refreshInterval = setInterval(refreshData, 60000);
+            }
+        }
+
+        // Funkcja do zatrzymywania automatycznych odświeżeń
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                console.log('Zatrzymywanie automatycznych odświeżeń');
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+            if (lastCheckInterval) {
+                console.log('Zatrzymywanie sprawdzania czasu ostatniego sprawdzenia');
+                clearInterval(lastCheckInterval);
+                lastCheckInterval = null;
+            }
+        }
+
+        // Uruchom automatyczne odświeżanie po załadowaniu strony
+        document.addEventListener('DOMContentLoaded', function() {
+            // Zatrzymaj wszystkie istniejące interwały
+            stopAutoRefresh();
+            
+            // Uruchom nowe interwały
+            startAutoRefresh();
+            lastCheckInterval = setInterval(updateLastCheckTime, 5000);
+            
+            // Poproś o uprawnienia do powiadomień
+            if ('Notification' in window) {
+                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                    Notification.requestPermission();
+                }
+            }
+            
+            // Inicjalizuj znacznik powiadomień
+            const badge = document.getElementById('notificationBadge');
+            if (badge) {
+                const inactiveCount = document.querySelectorAll('.notification-item').length;
+                badge.textContent = inactiveCount;
+                badge.style.display = inactiveCount > 0 ? 'block' : 'none';
+            }
+            
+            // Dołącz nasłuchiwacze zdarzeń
+            attachNotificationEventListeners();
+            attachTableEventListeners();
+        });
+
         // Update last check time
         function updateLastCheckTime() {
+            if (isScanning) {
+                console.log('Pomijanie sprawdzania czasu podczas skanowania');
+                return;
+            }
+            
             fetch('{{ url_for("get_last_check_time") }}')
                 .then(response => response.json())
                 .then(data => {
+                    console.log('Odpowiedź czasu ostatniego sprawdzenia:', data);
                     const timeElement = document.getElementById('lastCheckTime');
                     if (timeElement) {
                         const serverTime = new Date(data.last_check_time);
@@ -400,69 +462,153 @@
                         });
                     }
                     
-                    // Refresh the page if check cycle completed or interval changed
+                    // Odśwież stronę jeśli cykl sprawdzania został zakończony lub interwał został zmieniony
                     if (data.check_cycle_complete || data.interval_changed) {
-                        window.location.reload();
+                        console.log('Cykl sprawdzania zakończony lub interwał zmieniony, odświeżanie strony...');
+                        // Add a small delay to ensure the log is visible
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 100);
                     }
                 })
                 .catch(error => {
-                    console.error('Error updating last check time:', error);
+                    console.error('Błąd aktualizacji czasu ostatniego sprawdzenia:', error);
                 });
         }
 
-        // Update notification sidebar
+        // Modify the existing refreshData function
+        function refreshData() {
+            if (isScanning) {
+                console.log('Pomijanie odświeżania danych podczas skanowania');
+                return;
+            }
+            
+            console.log('Rozpoczynanie odświeżania danych...');
+            const currentSearch = deviceSearch.value;
+            const currentFilterState = currentFilter;
+            
+            // Update last check time first
+            fetch('{{ url_for("get_last_check_time") }}')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Odpowiedź czasu ostatniego sprawdzenia:', data);
+                    const timeElement = document.getElementById('lastCheckTime');
+                    if (timeElement) {
+                        // Only update the time if it's from a completed check cycle
+                        if (data.check_cycle_complete) {
+                            const serverTime = new Date(data.last_check_time);
+                            timeElement.dataset.timestamp = serverTime.getTime() / 1000;
+                            timeElement.textContent = serverTime.toLocaleTimeString('en-US', {
+                                hour12: false,
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                            });
+                        }
+                    }
+                    
+                    // Refresh the page if check cycle completed or interval changed
+                    if (data.check_cycle_complete || data.interval_changed) {
+                        console.log('Cykl sprawdzania zakończony lub interwał zmieniony, odświeżanie strony...');
+                        // Add a small delay to ensure the log is visible
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 100);
+                        return;
+                    }
+                    
+                    // Continue with normal refresh if no cycle completion
+                    fetch(window.location.href)
+                        .then(response => response.text())
+                        .then(html => {
+                            console.log('Pobrano nową zawartość strony');
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(html, 'text/html');
+                            
+                            // Update device statuses and last checked times
+                            const newRows = doc.querySelectorAll('tbody tr');
+                            const tbody = document.querySelector('tbody');
+                            tbody.innerHTML = '';
+                            newRows.forEach(row => {
+                                tbody.appendChild(row.cloneNode(true));
+                            });
+                            
+                            // Reattach event listeners to the new rows
+                            attachTableEventListeners();
+                            
+                            // Update notifications (this will now handle notifications for new inactive devices)
+                            updateNotifications(html);
+                            
+                            // Restore search and filter state
+                            deviceSearch.value = currentSearch;
+                            currentFilter = currentFilterState;
+                            filterDevices();
+                            
+                            console.log('Odświeżanie danych zakończone');
+                        })
+                        .catch(error => {
+                            console.error('Błąd odświeżania danych:', error);
+                        });
+                })
+                .catch(error => {
+                    console.error('Błąd aktualizacji czasu ostatniego sprawdzenia:', error);
+                });
+        }
+
+        // Aktualizuj pasek postępu
         function updateNotifications(html) {
-            console.log('Updating notifications...');
+            console.log('Aktualizacja powiadomień...');
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             const notificationList = document.getElementById('notificationList');
             const newNotifications = doc.querySelectorAll('.notification-item');
             
-            // Get current device states from the main table
+            // Pobierz aktualne stany urządzeń z głównej tabeli
             const currentDeviceStates = new Map();
             document.querySelectorAll('tbody tr').forEach(row => {
                 const deviceId = row.querySelector('.check-device').dataset.deviceId;
                 const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
                 currentDeviceStates.set(deviceId, status);
-                console.log('Current device state:', { deviceId, status });
+                console.log('Aktualny stan urządzenia:', { deviceId, status });
             });
             
-            // Get new device states from the fetched HTML
+            // Pobierz nowe stany urządzeń z pobranego HTML
             const newDeviceStates = new Map();
             doc.querySelectorAll('tbody tr').forEach(row => {
                 const deviceId = row.querySelector('.check-device').dataset.deviceId;
                 const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
                 newDeviceStates.set(deviceId, status);
-                console.log('New device state:', { deviceId, status });
+                console.log('Nowy stan urządzenia:', { deviceId, status });
             });
             
-            // Update notification count
+            // Aktualizuj licznik powiadomień
             const badge = document.getElementById('notificationBadge');
             const inactiveCount = document.getElementById('inactiveCount');
             badge.textContent = newNotifications.length;
             inactiveCount.textContent = newNotifications.length;
             badge.style.display = newNotifications.length > 0 ? 'block' : 'none';
             
-            // Update notification list and check for new inactive devices
+            // Aktualizuj listę powiadomień i sprawdź nowe nieaktywne urządzenia
             notificationList.innerHTML = '';
             newNotifications.forEach(notification => {
                 const deviceId = notification.dataset.deviceId;
                 const ip = notification.querySelector('.notification-title').textContent;
                 const name = notification.querySelector('.notification-title').textContent;
                 
-                console.log('Processing notification for device:', { deviceId, ip, name });
+                console.log('Przetwarzanie powiadomienia dla urządzenia:', { deviceId, ip, name });
                 
-                // Check if this device just became inactive
+                // Sprawdź czy urządzenie właśnie stało się nieaktywne
                 const oldStatus = currentDeviceStates.get(deviceId);
                 const newStatus = newDeviceStates.get(deviceId);
                 
-                console.log('Device status change:', { deviceId, oldStatus, newStatus });
+                console.log('Zmiana stanu urządzenia:', { deviceId, oldStatus, newStatus });
                 
                 if (oldStatus === 'active' && newStatus === 'inactive') {
-                    console.log('NEW INACTIVE DEVICE DETECTED:', { deviceId, ip, name });
+                    console.log('WYKRYTO NOWE NIEAKTYWNE URZĄDZENIE:', { deviceId, ip, name });
                     showStatusChangeNotification({
                         ip_address: ip,
-                        name: name || 'Unknown',
+                        name: name || 'Nieznane',
                         status: 'inactive',
                         timestamp: Date.now()
                     });
@@ -471,8 +617,51 @@
                 notificationList.appendChild(notification.cloneNode(true));
             });
             
-            // Reattach event listeners
+            // Ponownie dołącz nasłuchiwacze zdarzeń
             attachNotificationEventListeners();
+        }
+
+        // Funkcja do wyświetlania powiadomienia na pulpicie
+        function showStatusChangeNotification(device) {
+            console.log('Próba wyświetlenia powiadomienia dla:', device);
+            
+            // Sprawdź czy powiadomienia są obsługiwane
+            if (!('Notification' in window)) {
+                console.error('Powiadomienia nie są obsługiwane w tej przeglądarce');
+                return;
+            }
+
+            // Sprawdź uprawnienia do powiadomień
+            if (Notification.permission === 'denied') {
+                console.error('Uprawnienia do powiadomień zostały odrzucone');
+                return;
+            }
+
+            // Utwórz powiadomienie jeśli uprawnienia są przyznane
+            try {
+                console.log('Tworzenie powiadomienia dla urządzenia:', device);
+                const notification = new Notification('Zmiana stanu urządzenia', {
+                    body: `Urządzenie ${device.ip_address} (${device.name || 'Nieznane'}) jest teraz ${device.status}`,
+                    icon: '{{ url_for("static", filename="favicon-32x32.png") }}',
+                    tag: `device-${device.ip_address}-${Date.now()}`,  // Uczyń tag unikalnym z timestampem
+                    requireInteraction: true,
+                    silent: false
+                });
+
+                notification.onclick = function() {
+                    console.log('Kliknięto powiadomienie');
+                    window.focus();
+                    this.close();
+                };
+
+                notification.onerror = function(error) {
+                    console.error('Błąd powiadomienia:', error);
+                };
+
+                console.log('Powiadomienie utworzone pomyślnie');
+            } catch (error) {
+                console.error('Błąd podczas tworzenia powiadomienia:', error);
+            }
         }
 
         // Attach event listeners to notification items
@@ -598,81 +787,6 @@
             );
             deleteSelectedBtn.style.display = visibleCheckedBoxes.length > 0 ? 'block' : 'none';
         }
-        
-        // Modify the existing refreshData function to preserve search/filter
-        function refreshData() {
-            console.log('Starting data refresh...');
-            const currentSearch = deviceSearch.value;
-            const currentFilterState = currentFilter;
-            
-            // Update last check time first
-            fetch('{{ url_for("get_last_check_time") }}')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Last check time response:', data);
-                    const timeElement = document.getElementById('lastCheckTime');
-                    if (timeElement) {
-                        // Only update the time if it's from a completed check cycle
-                        if (data.check_cycle_complete) {
-                            const serverTime = new Date(data.last_check_time);
-                            timeElement.dataset.timestamp = serverTime.getTime() / 1000;
-                            timeElement.textContent = serverTime.toLocaleTimeString('en-US', {
-                                hour12: false,
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                second: '2-digit',
-                                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-                            });
-                        }
-                    }
-                    
-                    // Refresh the page if check cycle completed or interval changed
-                    if (data.check_cycle_complete || data.interval_changed) {
-                        console.log('Check cycle completed or interval changed, will refresh in 2 seconds...');
-                        // Add a delay before refresh to allow logs to be seen
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
-                        return;
-                    }
-                    
-                    // Continue with normal refresh if no cycle completion
-                    fetch(window.location.href)
-                        .then(response => response.text())
-                        .then(html => {
-                            console.log('Fetched new page content');
-                            const parser = new DOMParser();
-                            const doc = parser.parseFromString(html, 'text/html');
-                            
-                            // Update device statuses and last checked times
-                            const newRows = doc.querySelectorAll('tbody tr');
-                            const tbody = document.querySelector('tbody');
-                            tbody.innerHTML = '';
-                            newRows.forEach(row => {
-                                tbody.appendChild(row.cloneNode(true));
-                            });
-                            
-                            // Reattach event listeners to the new rows
-                            attachTableEventListeners();
-                            
-                            // Update notifications (this will now handle notifications for new inactive devices)
-                            updateNotifications(html);
-                            
-                            // Restore search and filter state
-                            deviceSearch.value = currentSearch;
-                            currentFilter = currentFilterState;
-                            filterDevices();
-                            
-                            console.log('Data refresh completed');
-                        })
-                        .catch(error => {
-                            console.error('Error refreshing data:', error);
-                        });
-                })
-                .catch(error => {
-                    console.error('Error updating last check time:', error);
-                });
-        }
 
         // Function to attach event listeners to table elements
         function attachTableEventListeners() {
@@ -731,180 +845,6 @@
             });
         }
 
-        // Add a variable to track if scanning is in progress
-        let isScanning = false;
-        let refreshInterval = null;
-
-        // Function to start automatic refreshes
-        function startAutoRefresh() {
-            if (!refreshInterval) {
-                console.log('Starting automatic refreshes');
-                refreshInterval = setInterval(refreshData, 60000);
-            }
-        }
-
-        // Function to stop automatic refreshes
-        function stopAutoRefresh() {
-            if (refreshInterval) {
-                console.log('Stopping automatic refreshes');
-                clearInterval(refreshInterval);
-                refreshInterval = null;
-            }
-        }
-
-        // Start automatic refreshes when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            startAutoRefresh();
-            
-            // Request notification permission
-            if ('Notification' in window) {
-                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-                    Notification.requestPermission();
-                }
-            }
-            
-            // Initialize notification badge
-            const badge = document.getElementById('notificationBadge');
-            if (badge) {
-                const inactiveCount = document.querySelectorAll('.notification-item').length;
-                badge.textContent = inactiveCount;
-                badge.style.display = inactiveCount > 0 ? 'block' : 'none';
-            }
-            
-            // Attach event listeners
-            attachNotificationEventListeners();
-            attachTableEventListeners();
-        });
-
-        // Scan Range Form Handler
-        document.getElementById('scanRangeForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            const formData = new FormData(this);
-            const scanButton = document.getElementById('scanButton');
-            const progressDiv = document.getElementById('scanProgress');
-            const progressBar = progressDiv.querySelector('.progress-bar');
-            const progressText = document.getElementById('scanProgressText');
-            const foundDevices = document.getElementById('scanFoundDevices');
-            const activeIpsCount = document.getElementById('activeIpsCount');
-            
-            // Validate IP range format
-            const ipRange = formData.get('ip_range');
-            if (!ipRange) {
-                alert('Please enter an IP range');
-                return;
-            }
-            
-            // Stop automatic refreshes and set scanning flag
-            stopAutoRefresh();
-            isScanning = true;
-            
-            // Disable scan button and show progress
-            scanButton.disabled = true;
-            progressDiv.style.display = 'block';
-            progressBar.style.width = '0%';
-            progressText.textContent = '0%';
-            foundDevices.textContent = '0';
-            activeIpsCount.textContent = '0';
-            
-            // Start the scan
-            fetch('{{ url_for("scan_range") }}', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-                
-                // Connect to SSE endpoint for progress updates
-                const eventSource = new EventSource('{{ url_for("scan_progress") }}');
-                
-                eventSource.onmessage = function(event) {
-                    const progress = JSON.parse(event.data);
-                    
-                    switch(progress.type) {
-                        case 'active_ips':
-                            activeIpsCount.textContent = progress.count;
-                            break;
-                            
-                        case 'progress':
-                            const percentage = Math.round((progress.scanned / progress.total) * 100);
-                            progressBar.style.width = `${percentage}%`;
-                            progressText.textContent = `${percentage}%`;
-                            foundDevices.textContent = progress.found;
-                            break;
-                            
-                        case 'complete':
-                            progressBar.style.width = '100%';
-                            progressText.textContent = '100%';
-                            foundDevices.textContent = progress.found;
-                            activeIpsCount.textContent = progress.active_ips;
-                            
-                            // Show success message
-                            alert(progress.message);
-                            
-                            // Close the event source
-                            eventSource.close();
-                            
-                            // Reset scanning flag and restart automatic refreshes
-                            isScanning = false;
-                            startAutoRefresh();
-                            
-                            // Reload the page after a short delay
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 1000);
-                            break;
-                            
-                        case 'error':
-                            throw new Error(progress.error);
-                            
-                        case 'heartbeat':
-                            // Keep connection alive
-                            break;
-                    }
-                };
-                
-                eventSource.onerror = function(error) {
-                    console.error('EventSource error:', error);
-                    eventSource.close();
-                    
-                    // Reset scanning flag and restart automatic refreshes on error
-                    isScanning = false;
-                    startAutoRefresh();
-                    
-                    throw new Error('Lost connection to server');
-                };
-            })
-            .catch(error => {
-                console.error('Scan error:', error);
-                
-                let errorMessage = 'An error occurred while scanning the range';
-                if (error.name === 'AbortError') {
-                    errorMessage = 'Scan operation timed out. Please try again with a smaller IP range.';
-                } else if (error.name === 'TypeError' && error.message.includes('NetworkError')) {
-                    errorMessage = 'Network error. Please check your connection and try again.';
-                } else if (error.message) {
-                    errorMessage = error.message;
-                }
-                
-                alert(errorMessage);
-                progressBar.style.width = '0%';
-                progressText.textContent = '0%';
-                foundDevices.textContent = '0';
-                activeIpsCount.textContent = '0';
-                
-                // Reset scanning flag and restart automatic refreshes on error
-                isScanning = false;
-                startAutoRefresh();
-            })
-            .finally(() => {
-                // Re-enable scan button
-                scanButton.disabled = false;
-            });
-        });
-
         // Bulk Delete Functionality
         const selectAll = document.getElementById('selectAll');
         const deviceCheckboxes = document.querySelectorAll('.device-checkbox');
@@ -954,49 +894,6 @@
             attachNotificationEventListeners();
             attachTableEventListeners();
         });
-
-        // Function to show desktop notification
-        function showStatusChangeNotification(device) {
-            console.log('Attempting to show notification for:', device);
-            
-            // Check if notifications are supported
-            if (!('Notification' in window)) {
-                console.error('Notifications are not supported in this browser');
-                return;
-            }
-
-            // Check notification permission
-            if (Notification.permission === 'denied') {
-                console.error('Notification permission has been denied');
-                return;
-            }
-
-            // Create notification if permission is granted
-            try {
-                console.log('Creating notification for device:', device);
-                const notification = new Notification('Device Status Change', {
-                    body: `Device ${device.ip_address} (${device.name || 'Unknown'}) is now ${device.status}`,
-                    icon: '{{ url_for("static", filename="favicon-32x32.png") }}',
-                    tag: `device-${device.ip_address}-${Date.now()}`,  // Make tag unique with timestamp
-                    requireInteraction: true,
-                    silent: false
-                });
-
-                notification.onclick = function() {
-                    console.log('Notification clicked');
-                    window.focus();
-                    this.close();
-                };
-
-                notification.onerror = function(error) {
-                    console.error('Notification error:', error);
-                };
-
-                console.log('Notification created successfully');
-            } catch (error) {
-                console.error('Error creating notification:', error);
-            }
-        }
 
         // Function to test notifications
         function testNotification() {
