@@ -412,10 +412,29 @@
 
         // Update notification sidebar
         function updateNotifications(html) {
+            console.log('Updating notifications...');
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             const notificationList = document.getElementById('notificationList');
             const newNotifications = doc.querySelectorAll('.notification-item');
+            
+            // Get current device states from the main table
+            const currentDeviceStates = new Map();
+            document.querySelectorAll('tbody tr').forEach(row => {
+                const deviceId = row.querySelector('.check-device').dataset.deviceId;
+                const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                currentDeviceStates.set(deviceId, status);
+                console.log('Current device state:', { deviceId, status });
+            });
+            
+            // Get new device states from the fetched HTML
+            const newDeviceStates = new Map();
+            doc.querySelectorAll('tbody tr').forEach(row => {
+                const deviceId = row.querySelector('.check-device').dataset.deviceId;
+                const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                newDeviceStates.set(deviceId, status);
+                console.log('New device state:', { deviceId, status });
+            });
             
             // Update notification count
             const badge = document.getElementById('notificationBadge');
@@ -424,9 +443,31 @@
             inactiveCount.textContent = newNotifications.length;
             badge.style.display = newNotifications.length > 0 ? 'block' : 'none';
             
-            // Update notification list
+            // Update notification list and check for new inactive devices
             notificationList.innerHTML = '';
             newNotifications.forEach(notification => {
+                const deviceId = notification.dataset.deviceId;
+                const ip = notification.querySelector('.notification-title').textContent;
+                const name = notification.querySelector('.notification-title').textContent;
+                
+                console.log('Processing notification for device:', { deviceId, ip, name });
+                
+                // Check if this device just became inactive
+                const oldStatus = currentDeviceStates.get(deviceId);
+                const newStatus = newDeviceStates.get(deviceId);
+                
+                console.log('Device status change:', { deviceId, oldStatus, newStatus });
+                
+                if (oldStatus === 'active' && newStatus === 'inactive') {
+                    console.log('NEW INACTIVE DEVICE DETECTED:', { deviceId, ip, name });
+                    showStatusChangeNotification({
+                        ip_address: ip,
+                        name: name || 'Unknown',
+                        status: 'inactive',
+                        timestamp: Date.now()
+                    });
+                }
+                
                 notificationList.appendChild(notification.cloneNode(true));
             });
             
@@ -587,8 +628,11 @@
                     
                     // Refresh the page if check cycle completed or interval changed
                     if (data.check_cycle_complete || data.interval_changed) {
-                        console.log('Check cycle completed or interval changed, refreshing page...');
-                        window.location.reload();
+                        console.log('Check cycle completed or interval changed, will refresh in 2 seconds...');
+                        // Add a delay before refresh to allow logs to be seen
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
                         return;
                     }
                     
@@ -600,14 +644,6 @@
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(html, 'text/html');
                             
-                            // Get current device statuses before update
-                            const currentStatuses = {};
-                            document.querySelectorAll('tbody tr').forEach(row => {
-                                const ip = row.querySelector('td:nth-child(2)').textContent;
-                                const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
-                                currentStatuses[ip] = status;
-                            });
-                            
                             // Update device statuses and last checked times
                             const newRows = doc.querySelectorAll('tbody tr');
                             const tbody = document.querySelector('tbody');
@@ -616,27 +652,10 @@
                                 tbody.appendChild(row.cloneNode(true));
                             });
                             
-                            // Check for status changes and trigger notifications
-                            newRows.forEach(row => {
-                                const ip = row.querySelector('td:nth-child(2)').textContent;
-                                const name = row.querySelector('td:nth-child(3)').textContent;
-                                const newStatus = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
-                                const oldStatus = currentStatuses[ip];
-                                
-                                if (oldStatus === 'active' && newStatus === 'inactive') {
-                                    console.log('Status change detected during refresh:', { ip, oldStatus, newStatus });
-                                    showStatusChangeNotification({
-                                        ip_address: ip,
-                                        name: name,
-                                        status: newStatus
-                                    });
-                                }
-                            });
-                            
                             // Reattach event listeners to the new rows
                             attachTableEventListeners();
                             
-                            // Update notifications
+                            // Update notifications (this will now handle notifications for new inactive devices)
                             updateNotifications(html);
                             
                             // Restore search and filter state
@@ -926,31 +945,13 @@
                 return;
             }
 
-            // Request permission if not granted
-            if (Notification.permission !== 'granted') {
-                console.log('Requesting notification permission...');
-                Notification.requestPermission().then(function(permission) {
-                    if (permission === 'granted') {
-                        createNotification(device);
-                    } else {
-                        console.error('Notification permission denied by user');
-                    }
-                });
-                return;
-            }
-
             // Create notification if permission is granted
-            createNotification(device);
-        }
-
-        // Function to create the actual notification
-        function createNotification(device) {
             try {
                 console.log('Creating notification for device:', device);
                 const notification = new Notification('Device Status Change', {
                     body: `Device ${device.ip_address} (${device.name || 'Unknown'}) is now ${device.status}`,
                     icon: '{{ url_for("static", filename="favicon-32x32.png") }}',
-                    tag: `device-${device.ip_address}`,
+                    tag: `device-${device.ip_address}-${Date.now()}`,  // Make tag unique with timestamp
                     requireInteraction: true,
                     silent: false
                 });
@@ -994,7 +995,8 @@
                         showStatusChangeNotification({
                             ip_address: '192.168.1.1',
                             name: 'Test Device',
-                            status: 'inactive'
+                            status: 'inactive',
+                            timestamp: Date.now()  // Add timestamp to make each test unique
                         });
                     } else {
                         alert('Notification permission denied. Please enable notifications to receive device status updates.');
@@ -1004,7 +1006,8 @@
                 showStatusChangeNotification({
                     ip_address: '192.168.1.1',
                     name: 'Test Device',
-                    status: 'inactive'
+                    status: 'inactive',
+                    timestamp: Date.now()  // Add timestamp to make each test unique
                 });
             }
         }
@@ -1050,8 +1053,9 @@
                     console.log('Triggering notification for status change to inactive');
                     showStatusChangeNotification({
                         ip_address: ip,
-                        name: name,
-                        status: status
+                        name: name || 'Unknown',
+                        status: newStatus,
+                        timestamp: Date.now()
                     });
                 }
             }
@@ -1091,6 +1095,71 @@
                     });
                 }
             });
+        });
+
+        // Add a function to check device status changes without refreshing
+        function checkDeviceStatusChanges() {
+            console.log('Checking device status changes...');
+            fetch(window.location.href)
+                .then(response => response.text())
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    
+                    // Get current device statuses
+                    const currentStatuses = {};
+                    console.log('Current devices:');
+                    document.querySelectorAll('tbody tr').forEach(row => {
+                        const ip = row.querySelector('td:nth-child(2)').textContent;
+                        const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                        const name = row.querySelector('td:nth-child(3)').textContent;
+                        currentStatuses[ip] = { status, name };
+                        console.log(`Current device: ${ip} - ${status} (${name})`);
+                    });
+                    
+                    // Get new device statuses
+                    console.log('New device statuses:');
+                    doc.querySelectorAll('tbody tr').forEach(row => {
+                        const ip = row.querySelector('td:nth-child(2)').textContent;
+                        const name = row.querySelector('td:nth-child(3)').textContent;
+                        const newStatus = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                        const oldStatus = currentStatuses[ip]?.status;
+                        
+                        console.log(`Comparing device ${ip}:`, {
+                            oldStatus: oldStatus || 'not found',
+                            newStatus: newStatus,
+                            name: name
+                        });
+                        
+                        if (oldStatus === 'active' && newStatus === 'inactive') {
+                            console.log('Status change detected:', { ip, oldStatus, newStatus });
+                            showStatusChangeNotification({
+                                ip_address: ip,
+                                name: name || 'Unknown',
+                                status: newStatus,
+                                timestamp: Date.now()
+                            });
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error checking device status changes:', error);
+                });
+        }
+
+        // Add a button to check status changes without refreshing
+        document.addEventListener('DOMContentLoaded', function() {
+            const header = document.querySelector('.card-header');
+            if (header) {
+                const headerContent = header.querySelector('.d-flex');
+                if (headerContent) {
+                    const checkButton = document.createElement('button');
+                    checkButton.className = 'btn btn-warning btn-sm ms-2';
+                    checkButton.innerHTML = '<i class="fas fa-sync"></i> Check Status Changes';
+                    checkButton.onclick = checkDeviceStatusChanges;
+                    headerContent.appendChild(checkButton);
+                }
+            }
         });
     </script>
 </body>
