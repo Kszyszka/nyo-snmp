@@ -167,9 +167,22 @@
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">Monitored Devices</h5>
-                    <button id="deleteSelectedBtn" class="btn btn-danger" style="display: none;">
-                        <i class="fas fa-trash"></i> Delete Selected
-                    </button>
+                    <div class="d-flex align-items-center">
+                        <div class="input-group me-3" style="width: 300px;">
+                            <input type="text" id="deviceSearch" class="form-control" placeholder="Search devices...">
+                            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                Filter
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><a class="dropdown-item" href="#" data-filter="all">All</a></li>
+                                <li><a class="dropdown-item" href="#" data-filter="active">Active</a></li>
+                                <li><a class="dropdown-item" href="#" data-filter="inactive">Inactive</a></li>
+                            </ul>
+                        </div>
+                        <button id="deleteSelectedBtn" class="btn btn-danger" style="display: none;">
+                            <i class="fas fa-trash"></i> Delete Selected
+                        </button>
+                    </div>
                 </div>
                 <div class="card-body">
                     <div class="table-responsive">
@@ -378,8 +391,85 @@
             });
         }
 
-        // Modify the existing refreshData function
+        // Add search and filter functionality
+        const deviceSearch = document.getElementById('deviceSearch');
+        let currentFilter = 'all';
+        
+        function filterDevices() {
+            const searchTerm = deviceSearch.value.toLowerCase();
+            const rows = document.querySelectorAll('tbody tr:not(#noResults)');
+            let visibleCount = 0;
+            
+            // Remove any existing "no results" message
+            const existingNoResults = document.getElementById('noResults');
+            if (existingNoResults) {
+                existingNoResults.remove();
+            }
+            
+            rows.forEach(row => {
+                const ip = row.querySelector('td:nth-child(2)').textContent.toLowerCase();
+                const name = row.querySelector('td:nth-child(3)').textContent.toLowerCase();
+                const statusBadge = row.querySelector('.status-cell .badge');
+                const status = statusBadge ? statusBadge.textContent.trim().toLowerCase() : '';
+                
+                const matchesSearch = ip.includes(searchTerm) || name.includes(searchTerm);
+                const matchesFilter = currentFilter === 'all' || status === currentFilter.toLowerCase();
+                
+                if (matchesSearch && matchesFilter) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            // Show "no results" message only if there are no visible rows
+            if (visibleCount === 0) {
+                const tbody = document.querySelector('tbody');
+                const message = document.createElement('tr');
+                message.id = 'noResults';
+                message.innerHTML = `
+                    <td colspan="9" class="text-center py-4">
+                        <div class="text-muted">
+                            <i class="fas fa-search fa-2x mb-2"></i>
+                            <p class="mb-0">No devices found matching your search criteria</p>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(message);
+            }
+            
+            // Update delete button visibility
+            updateDeleteButtonVisibility();
+        }
+        
+        // Add event listeners for search and filter
+        deviceSearch.addEventListener('input', filterDevices);
+        
+        document.querySelectorAll('.dropdown-item[data-filter]').forEach(item => {
+            item.addEventListener('click', function(e) {
+                e.preventDefault();
+                currentFilter = this.dataset.filter;
+                const button = document.querySelector('.dropdown-toggle');
+                button.textContent = this.textContent === 'All' ? 'Filter' : this.textContent;
+                filterDevices();
+            });
+        });
+        
+        // Modify the existing updateDeleteButtonVisibility function
+        function updateDeleteButtonVisibility() {
+            const checkedBoxes = document.querySelectorAll('.device-checkbox:checked');
+            const visibleCheckedBoxes = Array.from(checkedBoxes).filter(checkbox => 
+                checkbox.closest('tr').style.display !== 'none'
+            );
+            deleteSelectedBtn.style.display = visibleCheckedBoxes.length > 0 ? 'block' : 'none';
+        }
+        
+        // Modify the existing refreshData function to preserve search/filter
         function refreshData() {
+            const currentSearch = deviceSearch.value;
+            const currentFilterState = currentFilter;
+            
             fetch(window.location.href)
                 .then(response => response.text())
                 .then(html => {
@@ -405,6 +495,11 @@
                     
                     // Update last check time
                     updateLastCheckTime();
+                    
+                    // Restore search and filter state
+                    deviceSearch.value = currentSearch;
+                    currentFilter = currentFilterState;
+                    filterDevices();
                 })
                 .catch(error => {
                     console.error('Error refreshing data:', error);
@@ -572,44 +667,6 @@
 
         deviceCheckboxes.forEach(checkbox => {
             checkbox.addEventListener('change', updateDeleteButtonVisibility);
-        });
-
-        function updateDeleteButtonVisibility() {
-            const checkedBoxes = document.querySelectorAll('.device-checkbox:checked');
-            deleteSelectedBtn.style.display = checkedBoxes.length > 0 ? 'block' : 'none';
-        }
-
-        deleteSelectedBtn.addEventListener('click', function() {
-            const selectedDevices = Array.from(document.querySelectorAll('.device-checkbox:checked'))
-                .map(checkbox => parseInt(checkbox.value));
-
-            if (selectedDevices.length > 0 && confirm(`Are you sure you want to delete ${selectedDevices.length} devices?`)) {
-                fetch('/delete_devices', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ device_ids: selectedDevices })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    alert(data.message);
-                    window.location.reload();
-                })
-                .catch(error => {
-                    alert('An error occurred while deleting the devices');
-                });
-            }
-        });
-
-        // Initial setup
-        document.addEventListener('DOMContentLoaded', function() {
-            attachNotificationEventListeners();
-            attachTableEventListeners();
-            const inactiveCount = document.querySelectorAll('.notification-item').length;
-            const badge = document.getElementById('notificationBadge');
-            badge.textContent = inactiveCount;
-            badge.style.display = inactiveCount > 0 ? 'block' : 'none';
         });
 
         function updateDeviceStatus(ip, status, name, uptime, cpuUsage, memoryUsed, memoryTotal, lastChecked) {
