@@ -237,7 +237,7 @@
                                         {% endif %}
                                     </td>
                                     <td class="memory-cell">
-                                        {% if device.memory_used is not none and device.memory_total is not none %}
+                                        {% if device.memory_used is not none and device.memory_total is not none and device.memory_total > 0 %}
                                         <div class="progress" style="height: 20px;">
                                             {% set memory_percent = (device.memory_used / device.memory_total * 100)|round(1) %}
                                             <div class="progress-bar {% if memory_percent > 80 %}bg-danger{% elif memory_percent > 60 %}bg-warning{% else %}bg-success{% endif %}" 
@@ -476,15 +476,37 @@
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(html, 'text/html');
                     
+                    // Get current device statuses before update
+                    const currentStatuses = {};
+                    document.querySelectorAll('tbody tr').forEach(row => {
+                        const ip = row.querySelector('td:nth-child(2)').textContent;
+                        const status = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                        currentStatuses[ip] = status;
+                    });
+                    
                     // Update device statuses and last checked times
                     const newRows = doc.querySelectorAll('tbody tr');
-                    const currentRows = document.querySelectorAll('tbody tr');
-                    
-                    // Clear and rebuild the table body
                     const tbody = document.querySelector('tbody');
                     tbody.innerHTML = '';
                     newRows.forEach(row => {
                         tbody.appendChild(row.cloneNode(true));
+                    });
+                    
+                    // Check for status changes and trigger notifications
+                    newRows.forEach(row => {
+                        const ip = row.querySelector('td:nth-child(2)').textContent;
+                        const name = row.querySelector('td:nth-child(3)').textContent;
+                        const newStatus = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                        const oldStatus = currentStatuses[ip];
+                        
+                        if (oldStatus === 'active' && newStatus === 'inactive') {
+                            console.log('Status change detected during refresh:', { ip, oldStatus, newStatus });
+                            showStatusChangeNotification({
+                                ip_address: ip,
+                                name: name,
+                                status: newStatus
+                            });
+                        }
                     });
                     
                     // Reattach event listeners to the new rows
@@ -669,67 +691,95 @@
             checkbox.addEventListener('change', updateDeleteButtonVisibility);
         });
 
-        function updateDeviceStatus(ip, status, name, uptime, cpuUsage, memoryUsed, memoryTotal, lastChecked) {
-            const row = document.querySelector(`tr[data-ip="${ip}"]`);
-            if (row) {
-                // Update status
-                const statusCell = row.querySelector('.status-cell');
-                statusCell.innerHTML = `
-                    <span class="badge ${status === 'active' ? 'bg-success' : 'bg-danger'}">
-                        ${status}
-                    </span>
-                `;
-
-                // Update name
-                const nameCell = row.querySelector('td:nth-child(2)');
-                nameCell.textContent = name;
-
-                // Update uptime
-                const uptimeCell = row.querySelector('.uptime-cell');
-                uptimeCell.textContent = uptime || 'N/A';
-
-                // Update CPU usage
-                const cpuCell = row.querySelector('.cpu-cell');
-                if (cpuUsage !== null) {
-                    cpuCell.innerHTML = `
-                        <div class="progress" style="height: 20px;">
-                            <div class="progress-bar ${cpuUsage > 80 ? 'bg-danger' : cpuUsage > 60 ? 'bg-warning' : 'bg-success'}" 
-                                 role="progressbar" 
-                                 style="width: ${cpuUsage}%;" 
-                                 aria-valuenow="${cpuUsage}" 
-                                 aria-valuemin="0" 
-                                 aria-valuemax="100">
-                                ${cpuUsage.toFixed(1)}%
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    cpuCell.textContent = 'N/A';
+        // Add a test button to the page
+        document.addEventListener('DOMContentLoaded', function() {
+            const header = document.querySelector('.card-header');
+            if (header) {
+                const headerContent = header.querySelector('.d-flex');
+                if (headerContent) {
+                    const testButton = document.createElement('button');
+                    testButton.className = 'btn btn-info btn-sm ms-2';
+                    testButton.innerHTML = '<i class="fas fa-bell"></i> Test Notifications';
+                    testButton.onclick = testNotification;
+                    headerContent.appendChild(testButton);
                 }
-
-                // Update memory usage
-                const memoryCell = row.querySelector('.memory-cell');
-                if (memoryUsed !== null && memoryTotal !== null) {
-                    const memoryPercent = (memoryUsed / memoryTotal * 100).toFixed(1);
-                    memoryCell.innerHTML = `
-                        <div class="progress" style="height: 20px;">
-                            <div class="progress-bar ${memoryPercent > 80 ? 'bg-danger' : memoryPercent > 60 ? 'bg-warning' : 'bg-success'}" 
-                                 role="progressbar" 
-                                 style="width: ${memoryPercent}%;" 
-                                 aria-valuenow="${memoryPercent}" 
-                                 aria-valuemin="0" 
-                                 aria-valuemax="100">
-                                ${(memoryUsed / 1024).toFixed(1)}GB / ${(memoryTotal / 1024).toFixed(1)}GB
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    memoryCell.textContent = 'N/A';
+            }
+            
+            // Request notification permission
+            if ('Notification' in window) {
+                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                    Notification.requestPermission();
                 }
+            }
+            
+            // Initialize notification badge
+            const badge = document.getElementById('notificationBadge');
+            if (badge) {
+                const inactiveCount = document.querySelectorAll('.notification-item').length;
+                badge.textContent = inactiveCount;
+                badge.style.display = inactiveCount > 0 ? 'block' : 'none';
+            }
+            
+            // Attach event listeners
+            attachNotificationEventListeners();
+            attachTableEventListeners();
+        });
 
-                // Update last checked time
-                const lastCheckedCell = row.querySelector('.last-checked-cell');
-                lastCheckedCell.textContent = lastChecked;
+        // Function to show desktop notification
+        function showStatusChangeNotification(device) {
+            console.log('Attempting to show notification for:', device);
+            if (!device || !device.ip_address) {
+                console.error('Invalid device data for notification');
+                return;
+            }
+
+            if ('Notification' in window && Notification.permission === 'granted') {
+                try {
+                    const notification = new Notification('Device Status Change', {
+                        body: `Device ${device.ip_address} (${device.name || 'Unknown'}) is now ${device.status}`,
+                        icon: device.status === 'active' ? 
+                            '{{ url_for("static", filename="favicon-32x32.png") }}' : 
+                            '{{ url_for("static", filename="favicon-32x32.png") }}',
+                        tag: `device-${device.ip_address}`, // Prevent duplicate notifications
+                        requireInteraction: true
+                    });
+
+                    notification.onclick = function() {
+                        window.focus();
+                        this.close();
+                    };
+                    console.log('Notification sent successfully');
+                } catch (error) {
+                    console.error('Error showing notification:', error);
+                }
+            } else {
+                console.log('Notifications not available or permission not granted');
+            }
+        }
+
+        // Function to test notifications
+        function testNotification() {
+            console.log('Testing notification system...');
+            if ('Notification' in window) {
+                if (Notification.permission === 'granted') {
+                    showStatusChangeNotification({
+                        ip_address: '192.168.1.1',
+                        name: 'Test Device',
+                        status: 'inactive'
+                    });
+                } else if (Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(function(permission) {
+                        if (permission === 'granted') {
+                            showStatusChangeNotification({
+                                ip_address: '192.168.1.1',
+                                name: 'Test Device',
+                                status: 'inactive'
+                            });
+                        }
+                    });
+                }
+            } else {
+                console.log('Notifications not supported in this browser');
             }
         }
     </script>

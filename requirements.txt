@@ -6,3 +6,5 @@ Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.28 
 pyasn1==0.5.1
 pyasynchat==1.0.4
+pysnmp-mibs==0.1.6
+Flask-SSE==1.0.0

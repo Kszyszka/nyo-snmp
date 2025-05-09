@@ -147,30 +147,32 @@ def get_system_metrics(ip, community='public', timeout=1):
     }
     
     try:
-        # Get uptime (SNMPv2-MIB::sysUpTime.0)
-        try:
-            error_indication, error_status, error_index, var_binds = next(
-                getCmd(SnmpEngine(),
-                      CommunityData(community),
-                      UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
-                      ContextData(),
-                      ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysUpTime', 0)))
-            )
-            
-            if error_indication is None and error_status == 0:
-                uptime_ticks = int(var_binds[0][1])
-                uptime_seconds = uptime_ticks / 100
-                metrics['uptime'] = str(timedelta(seconds=int(uptime_seconds)))
-                logger.info(f"Got uptime for {ip}: {metrics['uptime']}")
-        except Exception as e:
-            logger.warning(f"Could not get uptime for {ip}: {str(e)}")
+        # Get uptime
+        error_indication, error_status, error_index, var_binds = next(
+            getCmd(SnmpEngine(),
+                  CommunityData(community),
+                  UdpTransportTarget((ip, 161), timeout=timeout),
+                  ContextData(),
+                  ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysUpTime', 0)))
+        )
+        
+        if error_indication:
+            logging.warning(f"Could not get uptime for {ip}: {error_indication}")
+        elif error_status:
+            logging.warning(f"Could not get uptime for {ip}: {error_status.prettyPrint()} at {error_index}")
+        else:
+            uptime_ticks = int(var_binds[0][1])
+            days = uptime_ticks // (24 * 60 * 60 * 100)
+            hours = (uptime_ticks % (24 * 60 * 60 * 100)) // (60 * 60 * 100)
+            minutes = (uptime_ticks % (60 * 60 * 100)) // (60 * 100)
+            metrics['uptime'] = f"{days}d {hours}h {minutes}m"
+            logging.info(f"Got uptime for {ip}: {metrics['uptime']}")
         
         # Try different OIDs for CPU usage
         cpu_oids = [
             ('HOST-RESOURCES-MIB', 'hrProcessorLoad', 0),  # Standard OID
-            ('UCD-SNMP-MIB', 'ssCpuUser', 0),             # UCD-SNMP-MIB
-            ('UCD-SNMP-MIB', 'ssCpuSystem', 0),           # UCD-SNMP-MIB
-            ('UCD-SNMP-MIB', 'ssCpuIdle', 0)              # UCD-SNMP-MIB
+            ('UCD-SNMP-MIB', 'ssCpuUser', 0),             # Alternative OID
+            ('UCD-SNMP-MIB', 'ssCpuSystem', 0)            # Another alternative
         ]
         
         for mib, oid, index in cpu_oids:
@@ -178,21 +180,18 @@ def get_system_metrics(ip, community='public', timeout=1):
                 error_indication, error_status, error_index, var_binds = next(
                     getCmd(SnmpEngine(),
                           CommunityData(community),
-                          UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
+                          UdpTransportTarget((ip, 161), timeout=timeout),
                           ContextData(),
                           ObjectType(ObjectIdentity(mib, oid, index)))
                 )
                 
-                if error_indication is None and error_status == 0:
-                    cpu_value = float(var_binds[0][1])
-                    if oid == 'ssCpuIdle':
-                        metrics['cpu_usage'] = 100 - cpu_value
-                    else:
-                        metrics['cpu_usage'] = cpu_value
-                    logger.info(f"Got CPU usage for {ip} using {mib}::{oid}: {metrics['cpu_usage']}%")
+                if not error_indication and not error_status:
+                    cpu_value = int(var_binds[0][1])
+                    metrics['cpu_usage'] = float(cpu_value)
+                    logging.info(f"Got CPU usage for {ip} using {mib}: {cpu_value}%")
                     break
             except Exception as e:
-                logger.debug(f"Could not get CPU usage for {ip} using {mib}::{oid}: {str(e)}")
+                continue
         
         # Try different OIDs for memory usage
         memory_oids = [
@@ -204,48 +203,70 @@ def get_system_metrics(ip, community='public', timeout=1):
             ('UCD-SNMP-MIB', 'memAvailReal', 0)
         ]
         
-        # Try to get memory using HOST-RESOURCES-MIB first
+        # First try HOST-RESOURCES-MIB
         try:
+            # Get used memory
             error_indication, error_status, error_index, var_binds = next(
                 getCmd(SnmpEngine(),
                       CommunityData(community),
-                      UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
+                      UdpTransportTarget((ip, 161), timeout=timeout),
                       ContextData(),
-                      ObjectType(ObjectIdentity('HOST-RESOURCES-MIB', 'hrStorageUsed', 1)),
-                      ObjectType(ObjectIdentity('HOST-RESOURCES-MIB', 'hrStorageSize', 1)))
+                      ObjectType(ObjectIdentity('HOST-RESOURCES-MIB', 'hrStorageUsed', 1)))
             )
             
-            if error_indication is None and error_status == 0:
-                memory_used = int(var_binds[0][1])
-                memory_total = int(var_binds[1][1])
-                metrics['memory_used'] = memory_used // (1024 * 1024)  # Convert to MB
-                metrics['memory_total'] = memory_total // (1024 * 1024)  # Convert to MB
-                logger.info(f"Got memory usage for {ip} using HOST-RESOURCES-MIB: {metrics['memory_used']}MB / {metrics['memory_total']}MB")
-        except Exception as e:
-            logger.debug(f"Could not get memory using HOST-RESOURCES-MIB for {ip}: {str(e)}")
-            
-            # Try UCD-SNMP-MIB as fallback
-            try:
+            if not error_indication and not error_status and var_binds[0][1]:
+                used_memory = int(var_binds[0][1])
+                
+                # Get total memory
                 error_indication, error_status, error_index, var_binds = next(
                     getCmd(SnmpEngine(),
                           CommunityData(community),
-                          UdpTransportTarget((ip, 161), timeout=timeout, retries=0),
+                          UdpTransportTarget((ip, 161), timeout=timeout),
                           ContextData(),
-                          ObjectType(ObjectIdentity('UCD-SNMP-MIB', 'memTotalReal', 0)),
-                          ObjectType(ObjectIdentity('UCD-SNMP-MIB', 'memAvailReal', 0)))
+                          ObjectType(ObjectIdentity('HOST-RESOURCES-MIB', 'hrStorageSize', 1)))
                 )
                 
-                if error_indication is None and error_status == 0:
-                    memory_total = int(var_binds[0][1])
-                    memory_available = int(var_binds[1][1])
-                    metrics['memory_total'] = memory_total // (1024 * 1024)  # Convert to MB
-                    metrics['memory_used'] = (memory_total - memory_available) // (1024 * 1024)  # Convert to MB
-                    logger.info(f"Got memory usage for {ip} using UCD-SNMP-MIB: {metrics['memory_used']}MB / {metrics['memory_total']}MB")
-            except Exception as e:
-                logger.warning(f"Could not get memory usage for {ip}: {str(e)}")
+                if not error_indication and not error_status and var_binds[0][1]:
+                    total_memory = int(var_binds[0][1])
+                    metrics['memory_used'] = used_memory // (1024 * 1024)  # Convert to MB
+                    metrics['memory_total'] = total_memory // (1024 * 1024)  # Convert to MB
+                    logging.info(f"Got memory usage for {ip} using HOST-RESOURCES-MIB: {metrics['memory_used']}MB / {metrics['memory_total']}MB")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Could not get memory usage for {ip} using HOST-RESOURCES-MIB: {str(e)}")
+            
+            # Try UCD-SNMP-MIB as fallback
+            try:
+                # Get total memory
+                error_indication, error_status, error_index, var_binds = next(
+                    getCmd(SnmpEngine(),
+                          CommunityData(community),
+                          UdpTransportTarget((ip, 161), timeout=timeout),
+                          ContextData(),
+                          ObjectType(ObjectIdentity('UCD-SNMP-MIB', 'memTotalReal', 0)))
+                )
+                
+                if not error_indication and not error_status and var_binds[0][1]:
+                    total_memory = int(var_binds[0][1])
+                    
+                    # Get available memory
+                    error_indication, error_status, error_index, var_binds = next(
+                        getCmd(SnmpEngine(),
+                              CommunityData(community),
+                              UdpTransportTarget((ip, 161), timeout=timeout),
+                              ContextData(),
+                              ObjectType(ObjectIdentity('UCD-SNMP-MIB', 'memAvailReal', 0)))
+                    )
+                    
+                    if not error_indication and not error_status and var_binds[0][1]:
+                        available_memory = int(var_binds[0][1])
+                        metrics['memory_total'] = total_memory // 1024  # Convert to MB
+                        metrics['memory_used'] = (total_memory - available_memory) // 1024  # Convert to MB
+                        logging.info(f"Got memory usage for {ip} using UCD-SNMP-MIB: {metrics['memory_used']}MB / {metrics['memory_total']}MB")
+            except (ValueError, TypeError) as e:
+                logging.warning(f"Could not get memory usage for {ip} using UCD-SNMP-MIB: {str(e)}")
         
         return metrics
         
     except Exception as e:
-        logger.error(f"Error getting system metrics for {ip}: {str(e)}")
+        logging.error(f"Error getting system metrics for {ip}: {str(e)}")
         return metrics 

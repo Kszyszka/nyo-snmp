@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timezone
 import ipaddress
 from snmp_operations import scan_ip, check_device_status, get_device_name, find_active_ips, get_system_metrics
 import threading
@@ -9,6 +9,7 @@ import json
 import os
 import logging
 import queue
+from flask_sse import sse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -30,7 +31,7 @@ DEFAULT_CONFIG = {
 
 # Global variables
 current_check_interval = None
-last_check_time = datetime.utcnow()
+last_check_time = datetime.now(timezone.utc)
 checking_active = True
 check_cycle_complete = False
 interval_changed = False
@@ -58,7 +59,7 @@ class Device(db.Model):
     ip_address = db.Column(db.String(15), unique=True, nullable=False)
     name = db.Column(db.String(100))
     status = db.Column(db.String(20))
-    last_checked = db.Column(db.DateTime, default=datetime.utcnow)
+    last_checked = db.Column(db.DateTime, default=datetime.now(timezone.utc))
     snmp_community = db.Column(db.String(50), default='public')
     uptime = db.Column(db.String(50))
     cpu_usage = db.Column(db.Float)
@@ -66,85 +67,44 @@ class Device(db.Model):
     memory_total = db.Column(db.Integer)  # in MB
 
 def check_all_devices():
-    global current_check_interval, last_check_time, checking_active, check_cycle_complete
+    """Check status of all devices in the database"""
     with app.app_context():
-        while checking_active:
+        devices = Device.query.all()
+        for device in devices:
             try:
-                # Reload config to ensure we have the latest interval
-                config = load_config()
-                current_check_interval = config['check_interval']
+                # Check if device is responding to SNMP
+                is_active = check_device_status(device.ip_address, device.snmp_community)
+                device.status = 'active' if is_active else 'inactive'
                 
-                cycle_start_time = time.time()
-                logger.info(f"Starting device check cycle. Current interval: {current_check_interval} seconds")
-                
-                devices = Device.query.all()
-                logger.info(f"Checking {len(devices)} devices")
-                
-                for device in devices:
-                    try:
-                        # Start a new transaction for each device
-                        with db.session.begin_nested():
-                            status = check_device_status(device.ip_address, device.snmp_community)
-                            device.status = 'active' if status else 'inactive'
-                            device.last_checked = datetime.utcnow()
-                            
-                            # If device is active, get additional metrics
-                            if status:
-                                # Try to get device name if needed
-                                if not device.name or device.name == 'Unknown':
-                                    try:
-                                        name = get_device_name(device.ip_address, device.snmp_community)
-                                        if name:
-                                            device.name = name
-                                    except Exception as name_error:
-                                        logger.error(f"Error getting device name for {device.ip_address}: {str(name_error)}")
-                                
-                                # Get system metrics
-                                try:
-                                    metrics = get_system_metrics(device.ip_address, device.snmp_community)
-                                    if metrics:
-                                        device.uptime = metrics['uptime']
-                                        device.cpu_usage = metrics['cpu_usage']
-                                        device.memory_used = metrics['memory_used']
-                                        device.memory_total = metrics['memory_total']
-                                except Exception as metrics_error:
-                                    logger.error(f"Error getting metrics for {device.ip_address}: {str(metrics_error)}")
-                            
-                            logger.info(f"Device {device.ip_address} status: {device.status}, name: {device.name}")
-                    except Exception as e:
-                        logger.error(f"Error checking device {device.ip_address}: {str(e)}")
+                # If device is active, try to get its name and metrics
+                if is_active:
+                    # Get device name if unknown
+                    if device.name == 'Unknown':
                         try:
-                            # Try to update the device status even if check fails
-                            with db.session.begin_nested():
-                                device.status = 'inactive'
-                                device.last_checked = datetime.utcnow()
-                        except Exception as update_error:
-                            logger.error(f"Error updating device status: {str(update_error)}")
-                            db.session.rollback()
+                            device_name = get_device_name(device.ip_address, device.snmp_community)
+                            if device_name:
+                                device.name = device_name
+                        except Exception as e:
+                            logging.error(f"Error getting device name for {device.ip_address}: {str(e)}")
+                    
+                    # Get system metrics
+                    try:
+                        metrics = get_system_metrics(device.ip_address, device.snmp_community)
+                        if metrics:
+                            device.uptime = metrics.get('uptime')
+                            device.cpu_usage = metrics.get('cpu_usage')
+                            device.memory_used = metrics.get('memory_used')
+                            device.memory_total = metrics.get('memory_total')
+                    except Exception as e:
+                        logging.error(f"Error getting metrics for {device.ip_address}: {str(e)}")
                 
-                try:
-                    db.session.commit()
-                    last_check_time = datetime.utcnow()
-                    check_cycle_complete = True
-                    logger.info(f"Updated last check time to: {last_check_time}")
-                except Exception as commit_error:
-                    logger.error(f"Error committing changes: {str(commit_error)}")
-                    db.session.rollback()
-                
-                # Calculate sleep time to maintain exact interval
-                elapsed_time = time.time() - cycle_start_time
-                sleep_time = max(0, current_check_interval - elapsed_time)
-                
-                logger.info(f"Check cycle completed in {elapsed_time:.2f} seconds. Next cycle in {sleep_time:.2f} seconds")
-                
-                # Sleep until next cycle
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                
+                device.last_checked = datetime.now(timezone.utc)
+                db.session.commit()
             except Exception as e:
-                logger.error(f"Error in check cycle: {str(e)}")
-                db.session.rollback()  # Ensure we rollback on any error
-                time.sleep(5)  # Sleep briefly before retrying
+                logging.error(f"Error checking device {device.ip_address}: {str(e)}")
+                device.status = 'inactive'
+                device.last_checked = datetime.now(timezone.utc)
+                db.session.commit()
 
 # Start the background checking thread
 checking_thread = threading.Thread(target=check_all_devices, daemon=True)
@@ -355,23 +315,39 @@ def scan_progress():
 
 @app.route('/check_status/<int:device_id>')
 def check_status(device_id):
+    """Check status of a specific device"""
     device = Device.query.get_or_404(device_id)
-    status = check_device_status(device.ip_address, device.snmp_community)
-    
-    device.status = 'active' if status else 'inactive'
-    device.last_checked = datetime.utcnow()
-    
-    # Try to get device name if status is active
-    if status and (not device.name or device.name == 'Unknown'):
-        try:
-            name = get_device_name(device.ip_address, device.snmp_community)
-            if name:
-                device.name = name
-        except Exception as e:
-            logger.error(f"Error getting device name: {str(e)}")
-    
-    db.session.commit()
-    return redirect(url_for('index'))
+    try:
+        is_active = check_device_status(device.ip_address, device.snmp_community)
+        device.status = 'active' if is_active else 'inactive'
+        
+        # If device is active, try to get its name and metrics
+        if is_active:
+            # Get device name if unknown
+            if device.name == 'Unknown':
+                try:
+                    device_name = get_device_name(device.ip_address, device.snmp_community)
+                    if device_name:
+                        device.name = device_name
+                except Exception as e:
+                    logging.error(f"Error getting device name for {device.ip_address}: {str(e)}")
+            
+            # Get system metrics
+            try:
+                metrics = get_system_metrics(device.ip_address, device.snmp_community)
+                if metrics:
+                    device.uptime = metrics.get('uptime')
+                    device.cpu_usage = metrics.get('cpu_usage')
+                    device.memory_used = metrics.get('memory_used')
+                    device.memory_total = metrics.get('memory_total')
+            except Exception as e:
+                logging.error(f"Error getting metrics for {device.ip_address}: {str(e)}")
+        
+        device.last_checked = datetime.now(timezone.utc)
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': f'Device {device.ip_address} is {device.status}'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/delete_device/<int:device_id>', methods=['POST'])
 def delete_device(device_id):
@@ -397,7 +373,7 @@ def check_all_devices_now():
         try:
             status = check_device_status(device.ip_address, device.snmp_community)
             device.status = 'active' if status else 'inactive'
-            device.last_checked = datetime.utcnow()
+            device.last_checked = datetime.now(timezone.utc)
             
             # Try to get device name if status is active
             if status and (not device.name or device.name == 'Unknown'):
@@ -410,7 +386,7 @@ def check_all_devices_now():
         except Exception as e:
             logger.error(f"Error checking device {device.ip_address}: {str(e)}")
             device.status = 'inactive'
-            device.last_checked = datetime.utcnow()
+            device.last_checked = datetime.now(timezone.utc)
     
     db.session.commit()
     return redirect(url_for('index'))
