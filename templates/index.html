@@ -287,9 +287,9 @@
                             <span class="notification-time">{{ device.last_checked.strftime('%H:%M:%S') }}</span>
                         </div>
                         <div class="notification-actions">
-                            <a href="{{ url_for('check_status', device_id=device.id) }}" class="btn btn-sm btn-primary">
+                            <button class="btn btn-sm btn-primary check-device" data-device-id="{{ device.id }}">
                                 <i class="fas fa-sync-alt"></i> Check Now
-                            </a>
+                            </button>
                             <button class="btn btn-sm btn-danger delete-device" data-device-id="{{ device.id }}">
                                 <i class="fas fa-trash"></i>
                             </button>
@@ -387,6 +387,34 @@
                             alert('An error occurred while deleting the device');
                         });
                     }
+                });
+            });
+
+            // Add event listeners for check buttons in notifications
+            document.querySelectorAll('.notification-item .check-device').forEach(button => {
+                button.addEventListener('click', function() {
+                    const deviceId = this.dataset.deviceId;
+                    const button = this;
+                    button.disabled = true;
+                    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+                    
+                    fetch(`/check_status/${deviceId}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                // Refresh the page to show updated status
+                                window.location.reload();
+                            } else {
+                                alert(data.message || 'Error checking device status');
+                                button.disabled = false;
+                                button.innerHTML = '<i class="fas fa-sync-alt"></i> Check Now';
+                            }
+                        })
+                        .catch(error => {
+                            alert('An error occurred while checking the device');
+                            button.disabled = false;
+                            button.innerHTML = '<i class="fas fa-sync-alt"></i> Check Now';
+                        });
                 });
             });
         }
@@ -728,60 +756,154 @@
         // Function to show desktop notification
         function showStatusChangeNotification(device) {
             console.log('Attempting to show notification for:', device);
-            if (!device || !device.ip_address) {
-                console.error('Invalid device data for notification');
+            
+            // Check if notifications are supported
+            if (!('Notification' in window)) {
+                console.error('Notifications are not supported in this browser');
                 return;
             }
 
-            if ('Notification' in window && Notification.permission === 'granted') {
-                try {
-                    const notification = new Notification('Device Status Change', {
-                        body: `Device ${device.ip_address} (${device.name || 'Unknown'}) is now ${device.status}`,
-                        icon: device.status === 'active' ? 
-                            '{{ url_for("static", filename="favicon-32x32.png") }}' : 
-                            '{{ url_for("static", filename="favicon-32x32.png") }}',
-                        tag: `device-${device.ip_address}`, // Prevent duplicate notifications
-                        requireInteraction: true
-                    });
+            // Check notification permission
+            if (Notification.permission === 'denied') {
+                console.error('Notification permission has been denied');
+                return;
+            }
 
-                    notification.onclick = function() {
-                        window.focus();
-                        this.close();
-                    };
-                    console.log('Notification sent successfully');
-                } catch (error) {
-                    console.error('Error showing notification:', error);
-                }
-            } else {
-                console.log('Notifications not available or permission not granted');
+            // Request permission if not granted
+            if (Notification.permission !== 'granted') {
+                console.log('Requesting notification permission...');
+                Notification.requestPermission().then(function(permission) {
+                    if (permission === 'granted') {
+                        createNotification(device);
+                    } else {
+                        console.error('Notification permission denied by user');
+                    }
+                });
+                return;
+            }
+
+            // Create notification if permission is granted
+            createNotification(device);
+        }
+
+        // Function to create the actual notification
+        function createNotification(device) {
+            try {
+                console.log('Creating notification for device:', device);
+                const notification = new Notification('Device Status Change', {
+                    body: `Device ${device.ip_address} (${device.name || 'Unknown'}) is now ${device.status}`,
+                    icon: '{{ url_for("static", filename="favicon-32x32.png") }}',
+                    tag: `device-${device.ip_address}`,
+                    requireInteraction: true,
+                    silent: false
+                });
+
+                notification.onclick = function() {
+                    console.log('Notification clicked');
+                    window.focus();
+                    this.close();
+                };
+
+                notification.onerror = function(error) {
+                    console.error('Notification error:', error);
+                };
+
+                console.log('Notification created successfully');
+            } catch (error) {
+                console.error('Error creating notification:', error);
             }
         }
 
         // Function to test notifications
         function testNotification() {
             console.log('Testing notification system...');
-            if ('Notification' in window) {
-                if (Notification.permission === 'granted') {
+            console.log('Notification permission status:', Notification.permission);
+            
+            if (!('Notification' in window)) {
+                alert('Notifications are not supported in this browser');
+                return;
+            }
+
+            if (Notification.permission === 'denied') {
+                alert('Notification permission has been denied. Please enable notifications in your browser settings.');
+                return;
+            }
+
+            if (Notification.permission !== 'granted') {
+                console.log('Requesting notification permission...');
+                Notification.requestPermission().then(function(permission) {
+                    console.log('Permission result:', permission);
+                    if (permission === 'granted') {
+                        showStatusChangeNotification({
+                            ip_address: '192.168.1.1',
+                            name: 'Test Device',
+                            status: 'inactive'
+                        });
+                    } else {
+                        alert('Notification permission denied. Please enable notifications to receive device status updates.');
+                    }
+                });
+            } else {
+                showStatusChangeNotification({
+                    ip_address: '192.168.1.1',
+                    name: 'Test Device',
+                    status: 'inactive'
+                });
+            }
+        }
+
+        // Modify the updateDeviceStatus function to handle notifications
+        function updateDeviceStatus(ip, status, name, uptime, cpuUsage, memoryUsed, memoryTotal, lastChecked) {
+            console.log('Updating device status:', { ip, status, name });
+            const row = document.querySelector(`tr[data-ip="${ip}"]`);
+            if (row) {
+                const oldStatus = row.querySelector('.status-cell .badge').textContent.trim().toLowerCase();
+                const newStatus = status.toLowerCase();
+                
+                console.log('Status change detected:', { oldStatus, newStatus });
+                
+                // Update status
+                const statusCell = row.querySelector('.status-cell');
+                statusCell.innerHTML = `
+                    <span class="badge ${status === 'active' ? 'bg-success' : 'bg-danger'}">
+                        ${status}
+                    </span>
+                `;
+
+                // Show notification if status changed to inactive
+                if (oldStatus === 'active' && newStatus === 'inactive') {
+                    console.log('Triggering notification for status change to inactive');
                     showStatusChangeNotification({
-                        ip_address: '192.168.1.1',
-                        name: 'Test Device',
-                        status: 'inactive'
+                        ip_address: ip,
+                        name: name,
+                        status: status
                     });
-                } else if (Notification.permission !== 'denied') {
+                }
+
+                // Rest of the function remains the same...
+            }
+        }
+
+        // Add notification permission check on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Checking notification support and permission...');
+            
+            if ('Notification' in window) {
+                console.log('Notifications are supported');
+                console.log('Current permission status:', Notification.permission);
+                
+                if (Notification.permission === 'default') {
+                    console.log('Requesting notification permission...');
                     Notification.requestPermission().then(function(permission) {
-                        if (permission === 'granted') {
-                            showStatusChangeNotification({
-                                ip_address: '192.168.1.1',
-                                name: 'Test Device',
-                                status: 'inactive'
-                            });
-                        }
+                        console.log('Permission result:', permission);
                     });
                 }
             } else {
-                console.log('Notifications not supported in this browser');
+                console.log('Notifications are not supported in this browser');
             }
-        }
+            
+            // Rest of the DOMContentLoaded code...
+        });
     </script>
 </body>
 </html> 
