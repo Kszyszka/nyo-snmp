@@ -130,7 +130,7 @@
                         <i class="fas fa-sync-alt"></i> Check All
                     </a>
                     <div class="text-muted">
-                        <small>Last check: <span id="lastCheckTime">{{ last_check_time.strftime('%H:%M:%S') }}</span></small>
+                        <small>Last check: <span id="lastCheckTime" data-timestamp="{{ last_check_time.timestamp() }}">{{ last_check_time.strftime('%H:%M:%S') }}</span></small>
                     </div>
                 </div>
             </div>
@@ -288,7 +288,9 @@
                                         N/A
                                         {% endif %}
                                     </td>
-                                    <td class="last-checked-cell">{{ device.last_checked.strftime('%Y-%m-%d %H:%M:%S') if device.last_checked else 'Never' }}</td>
+                                    <td class="last-checked-cell" data-timestamp="{{ device.last_checked.timestamp() if device.last_checked else '' }}">
+                                        {{ device.last_checked.strftime('%Y-%m-%d %H:%M:%S') if device.last_checked else 'Never' }}
+                                    </td>
                                     <td>
                                         <button class="btn btn-sm btn-primary check-device btn-fixed-width-sm" data-device-id="{{ device.id }}">
                                             <i class="fas fa-sync-alt"></i> Check
@@ -323,7 +325,9 @@
                     <div class="notification-item" data-device-id="{{ device.id }}">
                         <div class="notification-header">
                             <span class="notification-title">{{ device.ip_address }}</span>
-                            <span class="notification-time">{{ device.last_checked.strftime('%H:%M:%S') }}</span>
+                            <span class="notification-time" data-timestamp="{{ device.last_checked.timestamp() if device.last_checked else '' }}">
+                                {{ device.last_checked.strftime('%H:%M:%S') if device.last_checked else 'Never' }}
+                            </span>
                         </div>
                         <div class="notification-actions">
                             <button class="btn btn-sm btn-primary check-device btn-fixed-width-sm" data-device-id="{{ device.id }}">
@@ -364,6 +368,20 @@
             });
         });
 
+        // Add this function to format timestamps consistently
+        function formatTimestamp(timestamp) {
+            if (!timestamp) return 'Never';
+            // Convert UTC timestamp to local time
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleTimeString('en-US', { 
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+            });
+        }
+
         // Update last check time
         function updateLastCheckTime() {
             fetch('{{ url_for("get_last_check_time") }}')
@@ -371,7 +389,15 @@
                 .then(data => {
                     const timeElement = document.getElementById('lastCheckTime');
                     if (timeElement) {
-                        timeElement.textContent = data.last_check_time.split(' ')[1];
+                        const serverTime = new Date(data.last_check_time);
+                        timeElement.dataset.timestamp = serverTime.getTime() / 1000;
+                        timeElement.textContent = serverTime.toLocaleTimeString('en-US', {
+                            hour12: false,
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                        });
                     }
                     
                     // Refresh the page if check cycle completed or interval changed
@@ -919,7 +945,7 @@
             }
         }
 
-        // Modify the updateDeviceStatus function to handle notifications
+        // Update device status with server time
         function updateDeviceStatus(ip, status, name, uptime, cpuUsage, memoryUsed, memoryTotal, lastChecked) {
             console.log('Updating device status:', { ip, status, name });
             const row = document.querySelector(`tr[data-ip="${ip}"]`);
@@ -937,6 +963,24 @@
                     </span>
                 `;
 
+                // Update last checked time
+                const lastCheckedCell = row.querySelector('.last-checked-cell');
+                if (lastCheckedCell && lastChecked) {
+                    const serverTime = new Date(lastChecked);
+                    const timestamp = serverTime.getTime() / 1000;
+                    lastCheckedCell.dataset.timestamp = timestamp;
+                    lastCheckedCell.textContent = serverTime.toLocaleString('en-US', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false,
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    });
+                }
+
                 // Show notification if status changed to inactive
                 if (oldStatus === 'active' && newStatus === 'inactive') {
                     console.log('Triggering notification for status change to inactive');
@@ -946,56 +990,43 @@
                         status: status
                     });
                 }
-
-                // Rest of the function remains the same...
             }
         }
 
-        // Add notification permission check on page load
+        // Update all timestamps on page load
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('Checking notification support and permission...');
-            
-            if ('Notification' in window) {
-                console.log('Notifications are supported');
-                console.log('Current permission status:', Notification.permission);
-                
-                if (Notification.permission === 'default') {
-                    console.log('Requesting notification permission...');
-                    Notification.requestPermission().then(function(permission) {
-                        console.log('Permission result:', permission);
+            // Update all last-checked timestamps
+            document.querySelectorAll('.last-checked-cell[data-timestamp]').forEach(cell => {
+                const timestamp = cell.dataset.timestamp;
+                if (timestamp) {
+                    const date = new Date(timestamp * 1000);
+                    cell.textContent = date.toLocaleString('en-US', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false,
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
                     });
                 }
-            } else {
-                console.log('Notifications are not supported in this browser');
-            }
-            
-            // Add click handler for Check All Devices button
-            const checkAllBtn = document.getElementById('checkAllDevicesBtn');
-            if (checkAllBtn) {
-                checkAllBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    const button = this;
-                    button.disabled = true;
-                    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
-                    
-                    fetch(button.href)
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.status === 'success') {
-                                window.location.reload();
-                            } else {
-                                alert(data.message || 'Error checking devices');
-                                button.disabled = false;
-                                button.innerHTML = '<i class="fas fa-sync-alt"></i> Check All';
-                            }
-                        })
-                        .catch(error => {
-                            alert('An error occurred while checking devices');
-                            button.disabled = false;
-                            button.innerHTML = '<i class="fas fa-sync-alt"></i> Check All';
-                        });
-                });
-            }
+            });
+
+            // Update all notification timestamps
+            document.querySelectorAll('.notification-time[data-timestamp]').forEach(span => {
+                const timestamp = span.dataset.timestamp;
+                if (timestamp) {
+                    const date = new Date(timestamp * 1000);
+                    span.textContent = date.toLocaleTimeString('en-US', {
+                        hour12: false,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    });
+                }
+            });
         });
     </script>
 </body>

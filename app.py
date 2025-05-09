@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import ipaddress
 from snmp_operations import scan_ip, check_device_status, get_device_name, find_active_ips, get_system_metrics
 import threading
@@ -113,6 +113,10 @@ checking_thread.start()
 with app.app_context():
     db.create_all()
 
+def get_local_time():
+    """Convert UTC time to local time"""
+    return datetime.now(timezone.utc).astimezone()
+
 @app.route('/')
 def index():
     devices = Device.query.all()
@@ -120,13 +124,13 @@ def index():
     return render_template('index.html', 
                          devices=devices, 
                          check_interval=config['check_interval'],
-                         last_check_time=last_check_time)
+                         last_check_time=get_local_time())
 
 @app.route('/get_last_check_time')
 def get_last_check_time():
     global last_check_time, check_cycle_complete, interval_changed
     response = {
-        'last_check_time': last_check_time.strftime('%Y-%m-%d %H:%M:%S'),
+        'last_check_time': get_local_time().strftime('%Y-%m-%d %H:%M:%S'),
         'check_cycle_complete': check_cycle_complete,
         'interval_changed': interval_changed
     }
@@ -343,7 +347,7 @@ def check_status(device_id):
             except Exception as e:
                 logging.error(f"Error getting metrics for {device.ip_address}: {str(e)}")
         
-        device.last_checked = datetime.now(timezone.utc)
+        device.last_checked = get_local_time()
         db.session.commit()
         return jsonify({'status': 'success', 'message': f'Device {device.ip_address} is {device.status}'})
     except Exception as e:
@@ -373,7 +377,7 @@ def check_all_devices_now():
         try:
             status = check_device_status(device.ip_address, device.snmp_community)
             device.status = 'active' if status else 'inactive'
-            device.last_checked = datetime.now(timezone.utc)
+            device.last_checked = get_local_time()
             
             # Try to get device name if status is active
             if status and (not device.name or device.name == 'Unknown'):
@@ -386,7 +390,7 @@ def check_all_devices_now():
         except Exception as e:
             logger.error(f"Error checking device {device.ip_address}: {str(e)}")
             device.status = 'inactive'
-            device.last_checked = datetime.now(timezone.utc)
+            device.last_checked = get_local_time()
     
     db.session.commit()
     return redirect(url_for('index'))
