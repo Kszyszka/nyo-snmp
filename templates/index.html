@@ -1084,6 +1084,113 @@
                 }
             }
         });
+
+        // IP Range Scanning functionality
+        const scanRangeForm = document.getElementById('scanRangeForm');
+        const scanProgress = document.getElementById('scanProgress');
+        const progressBar = scanProgress.querySelector('.progress-bar');
+        const activeIpsCount = document.getElementById('activeIpsCount');
+        const scanProgressText = document.getElementById('scanProgressText');
+        const scanFoundDevices = document.getElementById('scanFoundDevices');
+
+        scanRangeForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (isScanning) {
+                alert('Skanowanie już trwa. Poczekaj na zakończenie.');
+                return;
+            }
+
+            const ipRange = document.getElementById('ip_range').value;
+            const community = document.getElementById('range_snmp_community').value;
+
+            if (!ipRange) {
+                alert('Proszę podać zakres IP');
+                return;
+            }
+
+            // Reset progress
+            progressBar.style.width = '0%';
+            activeIpsCount.textContent = '0';
+            scanProgressText.textContent = '0%';
+            scanFoundDevices.textContent = '0';
+            scanProgress.style.display = 'block';
+            isScanning = true;
+
+            // Disable scan button
+            const scanButton = document.getElementById('scanButton');
+            scanButton.disabled = true;
+            scanButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
+
+            // Start scanning
+            fetch('/scan_range', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `ip_range=${encodeURIComponent(ipRange)}&snmp_community=${encodeURIComponent(community)}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                console.log('Skanowanie rozpoczęte:', data);
+            })
+            .catch(error => {
+                console.error('Błąd rozpoczynania skanowania:', error);
+                alert('Błąd rozpoczynania skanowania: ' + error.message);
+                resetScanUI();
+            });
+
+            // Start progress updates
+            const eventSource = new EventSource('/scan_progress');
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('Otrzymano aktualizację postępu:', data);
+
+                switch (data.type) {
+                    case 'active_ips':
+                        activeIpsCount.textContent = data.count;
+                        break;
+                    case 'progress':
+                        const progress = (data.scanned / data.total) * 100;
+                        progressBar.style.width = `${progress}%`;
+                        scanProgressText.textContent = `${Math.round(progress)}%`;
+                        scanFoundDevices.textContent = data.found;
+                        break;
+                    case 'complete':
+                        console.log('Skanowanie zakończone:', data);
+                        eventSource.close();
+                        alert(`Skanowanie zakończone. Znaleziono ${data.devices.length} nowych urządzeń.`);
+                        window.location.reload();
+                        break;
+                    case 'error':
+                        console.error('Błąd skanowania:', data.error);
+                        eventSource.close();
+                        alert('Błąd skanowania: ' + data.error);
+                        resetScanUI();
+                        break;
+                    case 'heartbeat':
+                        // Ignore heartbeat messages
+                        break;
+                }
+            };
+
+            eventSource.onerror = function(error) {
+                console.error('Błąd EventSource:', error);
+                eventSource.close();
+                alert('Błąd połączenia z serwerem. Spróbuj ponownie.');
+                resetScanUI();
+            };
+        });
+
+        function resetScanUI() {
+            isScanning = false;
+            scanProgress.style.display = 'none';
+            const scanButton = document.getElementById('scanButton');
+            scanButton.disabled = false;
+            scanButton.innerHTML = '<i class="fas fa-search"></i> Scan Range';
+        }
     </script>
 </body>
 </html> 
