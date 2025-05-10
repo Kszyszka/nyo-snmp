@@ -26,27 +26,21 @@ Monitorowanie stanu urządzeń sieciowych za pomocą SNMP i Pythona.
 
 1. Sklonowanie repozytorium:
 
-```bash
+```
 git clone https://github.com/Kszyszka/nyo-snmp.git
 cd nyo-snmp
 ```
 
 2. Instalacja wymaganych bibliotek:
 
-```bash
+```
 pip install -r requirements.txt
 ```
 
 3. Uruchomienie aplikacji:
 
-```bash
-python app.py
 ```
-
-2. Instalacja wymaganych bibliotek:
-
-```bash
-pip install -r requirements.txt
+python app.py
 ```
 
 4. Otwórz przeglądarkę internetową i przejdź na stronę `http://127.0.0.1:5000`
